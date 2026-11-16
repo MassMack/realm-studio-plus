@@ -1020,19 +1020,6 @@ class ContentContainer extends React.Component<
             }
           })
         );
-        if (highlightedRows.size === 2) {
-          contextMenu.append(
-            new MenuItem({
-              label: 'Compare 2 selected rows (Diff)...',
-              click: () => {
-                const [idxA, idxB] = Array.from(highlightedRows).sort(
-                  (a, b) => a - b
-                );
-                this.compareTwoRows(results[idxA], results[idxB], idxA, idxB);
-              }
-            })
-          );
-        }
       } else if (rowObject) {
         contextMenu.append(
           new MenuItem({
@@ -1799,57 +1786,6 @@ class ContentContainer extends React.Component<
     } catch (err) {
       showError('Failed loading binary data from file', err);
     }
-  }
-
-  private compareTwoRows(
-    rawA: unknown,
-    rawB: unknown,
-    idxA: number,
-    idxB: number
-  ) {
-    const objA = (this.serializeRealmValue(rawA) ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const objB = (this.serializeRealmValue(rawB) ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const allKeys = Array.from(
-      new Set([...Object.keys(objA), ...Object.keys(objB)])
-    );
-    const differences: Record<string, { rowA: unknown; rowB: unknown }> = {};
-    const identical: Record<string, unknown> = {};
-
-    for (const key of allKeys) {
-      const valA = objA[key];
-      const valB = objB[key];
-      if (JSON.stringify(valA) !== JSON.stringify(valB)) {
-        differences[key] = { rowA: valA, rowB: valB };
-      } else {
-        identical[key] = valA;
-      }
-    }
-
-    const labelA =
-      rawA && typeof (rawA as Realm.Object).objectSchema === 'function'
-        ? displayObject(rawA as Realm.Object)
-        : `Row #${idxA}`;
-    const labelB =
-      rawB && typeof (rawB as Realm.Object).objectSchema === 'function'
-        ? displayObject(rawB as Realm.Object)
-        : `Row #${idxB}`;
-
-    this.props.onShowJsonViewerDialog({
-      _summary: {
-        rowA: labelA,
-        rowB: labelB,
-        differentFieldsCount: Object.keys(differences).length,
-        identicalFieldsCount: Object.keys(identical).length
-      },
-      differences,
-      identical
-    });
   }
 
   private findReferencesToObject(
