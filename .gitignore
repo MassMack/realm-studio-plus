@@ -1,0 +1,35 @@
+build/
+dist/
+node_modules/
+realm-object-server/
+.DS_Store
+data/
+*.log
+
+.idea/
+
+# Created by mocha-webpack
+.tmp/
+
+# Secrets
+secrets.sh
+electron-builder.env
+*.p12
+*.p8
+
+# Test results from JUnit and screenshots from failures
+test-results.xml
+failure-*.png
+spectron.log
+
+# Realm locks and management files
+*.realm.lock
+*.realm.management
+
+# Sentry cache folder
+.electron-symbols/
+
+# AI
+.claude/*.local.json
+.claude/worktree
+tasks/

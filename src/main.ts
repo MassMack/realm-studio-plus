@@ -1,0 +1,57 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// Copyright 2018 Realm Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+////////////////////////////////////////////////////////////////////////////
+
+// Don't report Realm JS analytics data
+// @see https://github.com/realm/realm-js/blob/master/lib/submit-analytics.js#L28
+process.env.REALM_DISABLE_ANALYTICS = 'true';
+
+import './sentry';
+// This is needed to prevent Realm JS from writing to directories it doesn't have access to
+import './utils/process-directories';
+
+import { app } from 'electron';
+
+// Enable GPU rasterization and V8 bytecode caching for faster startup and smoother scrolling
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('v8-cache-options', 'code');
+
+import * as ElectronRemote from '@electron/remote/main';
+ElectronRemote.initialize();
+
+// Loading the fetch API polyfill - so we can use this from the node main process too.
+import 'isomorphic-fetch';
+
+import { Application } from './main/Application';
+
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+// Make node understand the source-maps emitted from WebPack.
+if (isDevelopment) {
+  // We must require this the old fasioned way, as this is a dev dependency that might
+  // not be available when the packaged application is shipped, and import statements cannot
+  // be used in a block like this.
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('source-map-support').install();
+}
+
+Application.sharedApplication.run();
+app.on('will-quit', () => {
+  Application.sharedApplication.destroy();
+});

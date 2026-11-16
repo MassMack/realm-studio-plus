@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "esModuleInterop": true,
+
+    "jsx": "react-jsx",
+    "noImplicitAny": false,
+    "sourceMap": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "downlevelIteration": true,
+    "ignoreDeprecations": "6.0",
+
+    "typeRoots": ["node_modules/@types"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
+  "exclude": ["node_modules", "build", "dist"]
+}

@@ -1,0 +1,185 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// Copyright 2018 Realm Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+////////////////////////////////////////////////////////////////////////////
+
+import React from 'react';
+import Realm from 'realm';
+
+import { IClassFocus } from '../../../focus';
+
+import { BooleanControl } from './BooleanControl';
+import { DataControl } from './DataControl';
+import { DateControl } from './DateControl';
+import { Decimal128Control } from './Decimal128Control';
+import { DefaultControl } from './DefaultControl';
+import { ListControl } from './ListControl';
+import { NumericControl } from './NumericControl';
+import { ObjectControl } from './ObjectControl';
+import { ObjectIdControl } from './ObjectIdControl';
+import { UUIDControl } from './UUIDControl';
+import { StringControl } from './StringControl';
+import { IsEmbeddedTypeChecker, JsonViewerDialogExecutor } from '../../..';
+
+export interface IBaseControlProps<ValueType = any> {
+  children?: React.ReactNode;
+  onChange: (value: ValueType) => void;
+  property: Realm.ObjectSchemaProperty;
+  value: ValueType;
+}
+
+export interface ITypeControlProps extends IBaseControlProps {
+  generateInitialValue: (property: Realm.ObjectSchemaProperty) => any;
+  getClassFocus: (className: string) => IClassFocus;
+  isEmbeddedType: IsEmbeddedTypeChecker;
+  onShowJsonViewerDialog: JsonViewerDialogExecutor;
+}
+
+export const TypeControl = ({
+  children,
+  generateInitialValue,
+  getClassFocus,
+  onChange,
+  property,
+  value,
+  isEmbeddedType,
+  onShowJsonViewerDialog
+}: ITypeControlProps) => {
+  if (property.type === 'objectId') {
+    return (
+      <ObjectIdControl
+        onChange={onChange}
+        property={property}
+        value={value as Realm.BSON.ObjectId | null}
+      >
+        {children}
+      </ObjectIdControl>
+    );
+  } else if (property.type === 'uuid') {
+    return (
+      <UUIDControl
+        onChange={onChange}
+        property={property}
+        value={value as Realm.BSON.UUID | null}
+      >
+        {children}
+      </UUIDControl>
+    );
+  } else if (property.type === 'bool') {
+    return (
+      <BooleanControl
+        onChange={onChange}
+        property={property}
+        value={value as boolean}
+      >
+        {children}
+      </BooleanControl>
+    );
+  } else if (property.type === 'string') {
+    return (
+      <StringControl
+        onChange={onChange}
+        property={property}
+        value={value as string}
+      >
+        {children}
+      </StringControl>
+    );
+  } else if (
+    property.type === 'int' ||
+    property.type === 'float' ||
+    property.type === 'double'
+  ) {
+    return (
+      <NumericControl
+        property={property}
+        value={value as number | null}
+        onChange={onChange}
+      >
+        {children}
+      </NumericControl>
+    );
+  } else if (property.type === 'decimal128') {
+    return (
+      <Decimal128Control
+        property={property}
+        value={value as Realm.BSON.Decimal128 | null}
+        onChange={onChange}
+      >
+        {children}
+      </Decimal128Control>
+    );
+  } else if (property.type === 'date') {
+    return (
+      <DateControl
+        property={property}
+        value={value as string}
+        onChange={onChange}
+      >
+        {children}
+      </DateControl>
+    );
+  } else if (property.type === 'data') {
+    return (
+      <DataControl
+        property={property}
+        value={value as string}
+        onChange={onChange}
+      >
+        {children}
+      </DataControl>
+    );
+  } else if (property.type === 'object') {
+    if (isEmbeddedType(property.objectType)) {
+      return (
+        <DefaultControl
+          color="info"
+          property={property}
+          message="Embedded objects can be created from the table, once this object has been created."
+        />
+      );
+    }
+
+    return (
+      <ObjectControl
+        getClassFocus={getClassFocus}
+        onChange={onChange}
+        property={property}
+        value={value}
+        isEmbeddedType={isEmbeddedType}
+        onShowJsonViewerDialog={onShowJsonViewerDialog}
+      >
+        {children}
+      </ObjectControl>
+    );
+  } else if (property.type === 'list') {
+    return (
+      <ListControl
+        generateInitialValue={generateInitialValue}
+        getClassFocus={getClassFocus}
+        onChange={onChange}
+        property={property}
+        value={value as any[]}
+        isEmbeddedType={isEmbeddedType}
+        onShowJsonViewerDialog={onShowJsonViewerDialog}
+      >
+        {children}
+      </ListControl>
+    );
+  } else {
+    return <DefaultControl property={property} />;
+  }
+};

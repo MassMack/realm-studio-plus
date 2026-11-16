@@ -1,0 +1,241 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// Copyright 2018 Realm Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+////////////////////////////////////////////////////////////////////////////
+
+@import "~realm-studio-styles/variables";
+
+.LeftSidebar {
+  display: flex;
+  flex-direction: column;
+  padding: $spacer * .5;
+  padding-bottom: 0;
+
+  &__Header {
+    align-items: center;
+    border-bottom: 1px solid var(--rs-border);
+    color: var(--rs-text-muted);
+    display: flex;
+    flex-basis: 2.5rem;
+    flex-shrink: 0;
+    font-size: .9rem;
+    font-weight: bold;
+    justify-content: space-between;
+    margin-bottom: $spacer * .5;
+    padding-bottom: $spacer * .5;
+    padding-left: $spacer;
+    text-transform: uppercase;
+  }
+
+  &__HeaderActions {
+    display: flex;
+    gap: $spacer * .25;
+  }
+
+  &__Search {
+    align-items: center;
+    display: flex;
+    flex-shrink: 0;
+    margin-bottom: $spacer * .5;
+    position: relative;
+  }
+
+  &__SearchIcon {
+    color: var(--rs-text-muted);
+    font-size: .75rem;
+    left: $spacer * .6;
+    pointer-events: none;
+    position: absolute;
+  }
+
+  &__SearchInput {
+    font-size: .8rem;
+    padding-left: $spacer * 1.65;
+    padding-right: $spacer * 1.5;
+  }
+
+  &__SearchClear {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: var(--rs-text-muted);
+    cursor: pointer;
+    display: flex;
+    font-size: .8rem;
+    height: 100%;
+    padding: 0 ($spacer * .45);
+    position: absolute;
+    right: 0;
+
+    &:hover {
+      color: inherit;
+    }
+  }
+
+  &__Classes {
+    flex-grow: 1;
+    flex-shrink: 0;
+    margin: 0 (-$spacer * .5);
+    overflow: hidden auto;
+  }
+
+  &__ClassList {
+    padding: 0;
+
+    &--empty {
+      display: flex;
+      height: 100%;
+      justify-content: flex-start;
+
+      &::before {
+        color: var(--rs-text-muted);
+        content: "This Realm has no classes defined";
+        padding: $spacer;
+        text-align: center;
+      }
+    }
+  }
+
+  &__Class {
+    flex-direction: column;
+    list-style: none;
+
+    &__Name {
+      flex-grow: 1;
+      flex-shrink: 1;
+      overflow: hidden;
+      padding-right: $spacer * .25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__PinBtn {
+      background: transparent;
+      border: 0;
+      color: var(--rs-text-muted);
+      cursor: pointer;
+      flex-shrink: 0;
+      font-size: .78rem;
+      margin-right: $spacer * .35;
+      opacity: .35;
+      padding: 0;
+
+      &:hover {
+        opacity: 1;
+      }
+
+      &--pinned {
+        color: $melon;
+        opacity: 1;
+      }
+    }
+
+    &__Info {
+      align-items: center;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      padding: .75 * $spacer;
+      padding-left: 1.5 * $spacer;
+      position: relative;
+
+      &:hover,
+      &:focus {
+        background: var(--rs-list-hover-bg);
+      }
+
+      &--selected {
+        background: var(--rs-list-bg);
+      }
+
+      &--highlighted {
+        cursor: inherit;
+
+        &::before {
+          background: var(--rs-accent);
+          border-radius: 2px;
+          bottom: 5px;
+          content: "";
+          left: $spacer * .5;
+          position: absolute;
+          top: 5px;
+          width: 4px;
+        }
+      }
+    }
+  }
+
+  &__List {
+    background: var(--rs-list-bg);
+    // box-shadow: inset 0 0 .4rem $realm-browser-list-box-shadow-color;
+    padding: .75 * $spacer;
+    padding-left: 1.5 * $spacer;
+    padding-top: 0;
+    position: relative;
+
+    &__Name {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+
+      &__Text {
+        font-size: .8rem;
+        margin-right: $spacer * .5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    &__Parent {
+      font-size: .8rem;
+    }
+
+    &__ParentObject {
+      color: var(--rs-accent);
+      cursor: pointer;
+      overflow: hidden;
+      text-decoration: underline;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &::before {
+      background: var(--rs-accent);
+      border-radius: 2px;
+      bottom: 5px;
+      content: "";
+      left: $spacer * .5;
+      position: absolute;
+      top: 0;
+      width: 4px;
+    }
+  }
+
+  &__HiddenClassesHint,
+  &__ReadOnlyHint,
+  &__NoMatchHint {
+    color: var(--rs-text-muted);
+    font-size: .75rem;
+    margin: $spacer * .5;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

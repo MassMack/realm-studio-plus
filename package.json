@@ -1,0 +1,245 @@
+{
+  "name": "realm-studio-plus",
+  "productName": "Realm Studio Plus",
+  "version": "20.2.0",
+  "description": "A tool for everything Realm!",
+  "author": {
+    "name": "Realm",
+    "email": "info@realm.io",
+    "url": "https://realm.io"
+  },
+  "repository": "https://github.com/jooy2/realm-studio-plus",
+  "license": "Apache-2.0",
+  "main": "./build/main.bundle.js",
+  "build": {
+    "appId": "com.realm.realm-studio-plus",
+    "compression": "maximum",
+    "artifactName": "${name}-${version}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "./resources"
+    },
+    "files": [
+      "./build/**/*",
+      "./node_modules/**/*",
+      "./package.json",
+      "./static/**/*",
+      "!node_modules/realm/android${/*}",
+      "!node_modules/realm/react-native${/*}",
+      "!node_modules/realm/scripts${/*}",
+      "!node_modules/realm/src${/*}",
+      "!node_modules/realm/vendor${/*}"
+    ],
+    "asarUnpack": [
+      "./node_modules/realm/binding/build/realm.node"
+    ],
+    "mac": {
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "forceCodeSigning": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.inherit.plist",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "iconSize": 90,
+      "sign": false,
+      "contents": [
+        {
+          "x": 95,
+          "y": 200
+        },
+        {
+          "x": 430,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "artifactName": "${name}-${version}-${arch}-setup.${ext}",
+      "installerIcon": "resources/icon.ico",
+      "perMachine": true
+    },
+    "portable": {
+      "artifactName": "${name}-${version}-${arch}-portable.${ext}"
+    },
+    "protocols": [
+      {
+        "name": "Realm Studio",
+        "schemes": [
+          "x-realm-studio"
+        ]
+      }
+    ],
+    "fileAssociations": {
+      "ext": "realm",
+      "name": "Realm",
+      "isPackage": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jooy2",
+        "repo": "realm-studio-plus"
+      }
+    ],
+    "npmArgs": [
+      "--fallback-to-build=false"
+    ]
+  },
+  "scripts": {
+    "build": "webpack --mode production --config=configs/webpack.js",
+    "dev:debug": "REALM_STUDIO_DEV_TOOLS=true npm run dev",
+    "predev": "lsof -ti:8080 | xargs kill -9 2>/dev/null || true",
+    "dev": "rm -rf ./build && concurrently --kill-others --names \"WEBPACK:M,WEBPACK:R,ELECTRON\" \"npm run webpack:main\" \"npm run webpack:renderer\" \"npm run wait-for-bundle && ELECTRON_ENABLE_LOGGING=1 electron .\"",
+    "lint": "eslint . --ext .js,.ts,.tsx,.jsx --fix . && stylelint 'src/**/*.scss' 'styles/**/*.scss' --fix --max-warnings 0",
+    "lint:check": "eslint . && stylelint 'src/**/*.scss' 'styles/**/*.scss' --max-warnings 0",
+    "format": "prettier . --write",
+    "package": "electron-builder --publish=never",
+    "package:all": "electron-builder --publish=never -wml",
+    "postinstall": "electron-builder install-app-deps",
+    "prepackage": "rm -rf ./build && npm run build",
+    "generate-all-types-realm": "node ./scripts/generate-realm.js",
+    "start": "electron .",
+    "sentry:upload-symbols": "node ./scripts/sentry-symbols.js",
+    "test": "mochapack --mode development --webpack-config configs/webpack.test.js 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "test:post-package": "mochapack --mode development --webpack-config configs/webpack.test.js src/testing/post-packaging/index.ts",
+    "wait-for-bundle": "node ./scripts/wait-for-bundle.js",
+    "webpack:main": "webpack --mode development --config configs/webpack.main.js",
+    "webpack:renderer": "webpack serve --mode development --config configs/webpack.renderer.js",
+    "notarize:dmg": "node ./scripts/notarize-mac-dmg.js",
+    "verify:mac": "node ./scripts/verify-mac-signing.js",
+    "release:mac": "npm run package && npm run notarize:dmg && npm run verify:mac"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/modifiers": "^9.0.0",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@electron/remote": "^2.1.3",
+    "@sentry/electron": "^7.16.0",
+    "classnames": "^2.5.1",
+    "electron-store": "^11.0.2",
+    "electron-updater": "6.8.9",
+    "flatted": "^3.4.4",
+    "font-awesome": "^4.7.0",
+    "fs-extra": "^11.4.0",
+    "isomorphic-fetch": "^3.0.0",
+    "json5": "^2.2.3",
+    "memoize-one": "^6.0.0",
+    "mochapack": "^2.1.5",
+    "moment": "^2.30.1",
+    "papaparse": "^5.5.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-draggable": "^4.7.1",
+    "react-virtualized": "^9.22.6",
+    "reactstrap": "^9.2.3",
+    "realm": "^20.2.0",
+    "semver": "^7.8.5",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@octokit/rest": "^22.0.1",
+    "@sentry/cli": "^3.6.2",
+    "@sentry/webpack-plugin": "^5.4.0",
+    "@types/fs-extra": "^11.0.4",
+    "@types/isomorphic-fetch": "0.0.39",
+    "@types/jsdom": "^28.0.3",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.1.2",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@types/react-virtualized": "^9.22.3",
+    "@types/semver": "^7.8.0",
+    "@types/source-map-support": "^0.5.10",
+    "@types/tmp": "^0.2.6",
+    "@types/webpack": "^5.28.5",
+    "@types/webpack-env": "^1.18.8",
+    "@typescript-eslint/parser": "^8.66.0",
+    "bootstrap": "^5.3.8",
+    "commander": "^15.0.0",
+    "concurrently": "^10.0.4",
+    "css-loader": "^7.1.4",
+    "electron": "43.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-download": "^4.1.1",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-n": "^18.2.2",
+    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "faker": "^6.6.6",
+    "file-loader": "^6.2.0",
+    "globals": "^17.9.0",
+    "jiti": "^2.7.0",
+    "js-yaml": "^5.2.3",
+    "jsdom": "^30.0.1",
+    "mocha": "^11.8.0",
+    "mocha-github-actions-reporter": "^0.3.1",
+    "mocha-junit-reporter": "^2.2.1",
+    "null-loader": "^4.0.1",
+    "prettier": "^3.9.6",
+    "remark": "^15.0.1",
+    "resolve-url-loader": "^5.0.0",
+    "sass": "^1.102.0",
+    "sass-loader": "^17.0.0",
+    "simple-git": "^3.36.0",
+    "source-map-support": "^0.5.21",
+    "style-loader": "^4.0.0",
+    "stylelint": "^17.14.1",
+    "stylelint-config-standard-scss": "^17.0.0",
+    "svg-sprite-loader": "^6.0.11",
+    "tmp": "^0.2.7",
+    "ts-loader": "^9.6.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.66.0",
+    "url-loader": "^4.1.1",
+    "webpack": "^5.109.2",
+    "webpack-cli": "^7.2.2",
+    "webpack-dev-server": "^6.0.0",
+    "webpack-merge": "^6.0.1",
+    "webpack-node-externals": "^3.0.0",
+    "why-did-you-update": "^1.0.8",
+    "xvfb-maybe": "^0.2.1"
+  },
+  "engines": {
+    "node": "^26"
+  }
+}

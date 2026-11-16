@@ -1,0 +1,116 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// Copyright 2018 Realm Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+////////////////////////////////////////////////////////////////////////////
+@use "sass:color";
+
+// Realm theme colors
+$melon: #fcc397;
+$peach: #fc9f95;
+$sexy-salmon: #f77c88;
+$flamingo: #f25192;
+$mulberry: #d34ca3;
+$grape-jelly: #9a50a5;
+$indigo: #59569e;
+$ultramarine: #39477f;
+$charcoal: #1c233f;
+$elephant: #9a9ba5;
+$dove: #ebebf2;
+
+// The default bootstrap colors will be merged into this map
+$colors: (
+  "melon": $melon,
+  "peach": $peach,
+  "sexy-salmon": $sexy-salmon,
+  "flamingo": $flamingo,
+  "mulberry": $mulberry,
+  "grape-jelly": $grape-jelly,
+  "indigo": $indigo,
+  "ultramarine": $ultramarine,
+  "charcoal": $charcoal,
+  "elephant": $elephant,
+  "dove": $dove,
+);
+
+// Override bootstrap colors
+$primary: $ultramarine;
+$secondary: color.mix($dove, $elephant, 90%);
+$danger: $sexy-salmon;
+$info: $ultramarine;
+
+// Themed through a token so the placeholder stays legible in both appearances
+// @see styles/_theme.scss
+$input-placeholder-color: var(--rs-input-placeholder);
+
+$window-background: color.mix(#fff, $dove, 50%);
+$overlay-background: rgba($charcoal, .6);
+
+$body-bg: $window-background;
+
+// Increasig the yiq threshold to get a light text on a $secondary background
+$yiq-contrasted-threshold: 165;
+
+// When an element uses box-shadow to show that its raised above another element, use this color for the box-shadow
+$raised-shadow-color: rgb(0 0 0 / 10%);
+
+////////////////////////////////////////////////////////////////////////////
+//
+// Dark appearance
+//
+// The palette below is the counterpart of the light values above. It keeps the
+// navy cast of $charcoal so the dark appearance still reads as "Realm", while
+// staying dark enough for the brand accents to remain legible on top of it.
+// Surfaces get *lighter* as they get closer to the user, the usual elevation
+// convention for dark UIs.
+//
+////////////////////////////////////////////////////////////////////////////
+
+// Backdrop of a window - sleek carbon obsidian
+$dark-window-background: #0d0f14;
+// Content surfaces: tables, cards, popovers, inputs
+$dark-surface: #13161f;
+// Raised surfaces: selected rows, nested lists, hovered items
+$dark-surface-raised: #1b1f2b;
+// Even further raised, used for hover states on top of $dark-surface-raised
+$dark-surface-hover: #242938;
+
+$dark-border: #232836;
+$dark-border-strong: #32394d;
+
+$dark-body-color: #e4e7f0;
+$dark-muted-color: #8b92a8;
+$dark-emphasis-color: #fff;
+
+// Vibrant electric blue-indigo accent for high contrast on carbon black
+$dark-accent: #7aa2f7;
+
+$dark-overlay-background: rgb(4 5 8 / 78%);
+$dark-raised-shadow-color: rgb(0 0 0 / 60%);
+
+// Bootstrap's own `[data-bs-theme="dark"]` custom properties. Setting these
+// here (before `~bootstrap/scss/variables` is imported) means every Bootstrap
+// component - buttons, modals, dropdowns, forms, tables - picks up the palette
+// above without any per-component override.
+$body-bg-dark: $dark-window-background;
+$body-color-dark: $dark-body-color;
+$body-secondary-color-dark: $dark-muted-color;
+$body-secondary-bg-dark: $dark-surface;
+$body-tertiary-color-dark: rgba($dark-body-color, .5);
+$body-tertiary-bg-dark: $dark-surface-raised;
+$body-emphasis-color-dark: $dark-emphasis-color;
+$border-color-dark: $dark-border;
+$border-color-translucent-dark: rgb(255 255 255 / 12%);
+$link-color-dark: $dark-accent;

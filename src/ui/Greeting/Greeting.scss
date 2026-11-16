@@ -1,0 +1,258 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// Copyright 2018 Realm Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+////////////////////////////////////////////////////////////////////////////
+
+@import "~realm-studio-styles/variables";
+
+$history-panel-icon-size: 20px;
+
+.Greeting {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+
+  &__ActionsPanel,
+  &__HistoryPanel {
+    padding: $spacer * 1.9;
+  }
+
+  &__ActionsPanel {
+    align-items: center;
+    background: var(--rs-window-bg);
+    display: flex;
+    flex-basis: 60%;
+    flex-direction: column;
+    flex-shrink: 0;
+    justify-content: space-around;
+  }
+
+  &__Brand {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__Title {
+    margin-top: $spacer;
+  }
+
+  &__UpdateStatusIndicator {
+    cursor: pointer;
+    font-size: .8rem;
+    width: 80%;
+
+    &--busy {
+      cursor: wait;
+    }
+
+    &__Status {
+      margin: 0;
+      padding: $spacer * .25;
+      text-align: center;
+    }
+
+    &__Icon {
+      margin-right: $spacer * .5;
+    }
+
+    &__Progress {
+      height: .33rem;
+    }
+
+    &__Rail {
+      height: 100%;
+    }
+
+    &__Bar {
+      // The .25s matches the delay constant in updater.ts
+      transition: width .25s linear;
+    }
+  }
+
+  &__Actions {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__SecondaryActions {
+    display: flex;
+
+    & > * {
+      margin: 0 ($spacer * .25);
+    }
+  }
+
+  &__Action {
+    flex-basis: 2.5 * $spacer;
+    margin-bottom: $spacer * .75;
+  }
+
+  &__DownloadDemo {
+    font-size: .7rem;
+    margin-top: $spacer * .5;
+  }
+
+  &__HistoryPanel {
+    background: var(--rs-panel-bg);
+    color: var(--rs-panel-color);
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    font-size: .9rem;
+    min-height: 0;
+
+    a {
+      color: var(--rs-panel-color);
+    }
+
+    &__Header {
+      color: var(--rs-panel-header);
+      flex-shrink: 0;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .05em;
+      margin: 0 0 $spacer * .5;
+      text-transform: uppercase;
+    }
+
+    &__List {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+
+      &::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: var(--rs-panel-hover);
+        border-radius: 4px;
+
+        &:hover {
+          background: var(--rs-panel-empty);
+        }
+      }
+    }
+
+    &__Entry {
+      align-items: center;
+      border-radius: $spacer * .25;
+      display: flex;
+      padding: $spacer * .4 $spacer * .5;
+      transition: background-color .15s ease;
+
+      &--clickable {
+        cursor: pointer;
+
+        &:hover {
+          background: var(--rs-panel-hover);
+
+          .Greeting__HistoryPanel__Remove {
+            opacity: 1;
+          }
+        }
+      }
+    }
+
+    &__Icon {
+      flex-shrink: 0;
+      height: $history-panel-icon-size;
+      margin-right: $spacer * .6;
+      width: $history-panel-icon-size;
+
+      &--fa {
+        align-items: center;
+        display: inline-flex;
+        font-size: $history-panel-icon-size * .9;
+        justify-content: center;
+        opacity: .75;
+      }
+    }
+
+    &__Description {
+      flex-grow: 1;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    &__Name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__Path {
+      color: var(--rs-panel-muted);
+      direction: rtl;
+      font-size: .7rem;
+      overflow: hidden;
+      text-align: left;
+      text-overflow: ellipsis;
+      unicode-bidi: plaintext;
+      white-space: nowrap;
+    }
+
+    &__Remove {
+      background: transparent;
+      border: 0;
+      color: var(--rs-panel-header);
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-left: $spacer * .25;
+      opacity: 0;
+      padding: $spacer * .25 $spacer * .4;
+      transition: color .15s ease, opacity .15s ease;
+
+      &:hover {
+        color: $sexy-salmon;
+      }
+
+      &:focus {
+        opacity: 1;
+        outline: none;
+      }
+    }
+
+    &__Empty {
+      align-items: center;
+      color: var(--rs-panel-empty);
+      cursor: default;
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+      justify-content: center;
+      padding: $spacer * .5;
+      text-align: center;
+      user-select: none;
+
+      a {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  &__Logo {
+    width: 90px;
+  }
+}
