@@ -21,8 +21,9 @@ import * as remote from '@electron/remote';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   ButtonGroup,
@@ -35,8 +36,10 @@ import {
 } from 'reactstrap';
 import Realm from 'realm';
 
+import { analyzeSchemaWithAi } from '../../services/ai';
 import { saveEncryptionKeyForPath } from '../../services/encryption-keys';
 import { Language, SchemaExporter } from '../../services/schema-export';
+import { AI_PROVIDER_LABELS, settings } from '../../services/settings';
 
 import { ClassFocussedHandler } from '.';
 
@@ -84,9 +87,14 @@ export const DatabaseOverviewModal = ({
   toggle
 }: IDatabaseOverviewModalProps) => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'stats' | 'code'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'code' | 'ai'>('stats');
   const [selectedLang, setSelectedLang] = useState<Language>(Language.TS);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [aiReport, setAiReport] = useState<string>('');
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
+  const [copiedAi, setCopiedAi] = useState(false);
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   if (!isOpen || !realm) {
     return null;
@@ -248,9 +256,54 @@ export const DatabaseOverviewModal = ({
   const totalObjects = classStats.reduce((sum, item) => sum + item.count, 0);
   const embeddedCount = classStats.filter((c) => c.embedded).length;
   const standardCount = classStats.length - embeddedCount;
+  const aiConfig = settings.getAiSettings();
+
+  const handleCancelAi = () => {
+    if (aiAbortRef.current) {
+      aiAbortRef.current.abort();
+      aiAbortRef.current = null;
+    }
+    setIsAnalyzingAi(false);
+  };
+
+  const handleAnalyzeSchema = async () => {
+    if (aiAbortRef.current) {
+      aiAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    setIsAnalyzingAi(true);
+    setAiError(null);
+    setCopiedAi(false);
+
+    const objectCounts: Record<string, number> = {};
+    for (const item of classStats) {
+      objectCounts[item.name] = item.count;
+    }
+
+    try {
+      const report = await analyzeSchemaWithAi({
+        classes,
+        objectCounts,
+        signal: controller.signal
+      });
+      if (!controller.signal.aborted) {
+        setAiReport(report);
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setAiError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+        setIsAnalyzingAi(false);
+      }
+    }
+  };
 
   return (
-    <Modal isOpen={isOpen} toggle={toggle} size="lg">
+    <Modal isOpen={isOpen} toggle={toggle} onClosed={handleCancelAi} size="lg">
       <ModalHeader toggle={toggle}>
         <i className="fa fa-pie-chart" aria-hidden="true" /> Database Overview,
         Encryption &amp; Schema Code
@@ -271,6 +324,12 @@ export const DatabaseOverviewModal = ({
             >
               <i className="fa fa-code" aria-hidden="true" /> Schema Code
               Preview
+            </Button>
+            <Button
+              color={activeTab === 'ai' ? 'primary' : 'secondary'}
+              onClick={() => setActiveTab('ai')}
+            >
+              <i className="fa fa-magic" aria-hidden="true" /> AI Schema Advisor
             </Button>
           </ButtonGroup>
 
@@ -412,7 +471,7 @@ export const DatabaseOverviewModal = ({
               </Table>
             </div>
           </>
-        ) : (
+        ) : activeTab === 'code' ? (
           <pre
             style={{
               maxHeight: '420px',
@@ -422,6 +481,87 @@ export const DatabaseOverviewModal = ({
           >
             {generatedSchemaCode}
           </pre>
+        ) : (
+          <div>
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <div className="small text-muted">
+                Provider:{' '}
+                <Badge color="secondary">
+                  {AI_PROVIDER_LABELS[aiConfig.provider]} · {aiConfig.model}
+                </Badge>{' '}
+                <span className="ml-2">
+                  <i className="fa fa-lock" aria-hidden="true" /> Schema &amp;
+                  row counts only
+                </span>
+              </div>
+              <div className="d-flex align-items-center">
+                {aiReport && (
+                  <Button
+                    size="sm"
+                    color="secondary"
+                    className="mr-2"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(aiReport);
+                      setCopiedAi(true);
+                      setTimeout(() => setCopiedAi(false), 1200);
+                    }}
+                  >
+                    <i
+                      className={`fa ${copiedAi ? 'fa-check' : 'fa-copy'}`}
+                      aria-hidden="true"
+                    />{' '}
+                    {copiedAi ? 'Copied!' : 'Copy Report'}
+                  </Button>
+                )}
+                {isAnalyzingAi ? (
+                  <Button size="sm" color="danger" onClick={handleCancelAi}>
+                    Cancel
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    color="primary"
+                    onClick={() => void handleAnalyzeSchema()}
+                  >
+                    <i className="fa fa-magic" aria-hidden="true" />{' '}
+                    {aiReport ? 'Re-analyze Schema' : 'Analyze Schema'}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {aiError && (
+              <Alert color="danger" className="py-2 px-3 small">
+                {aiError}
+              </Alert>
+            )}
+
+            {isAnalyzingAi && !aiReport && (
+              <Alert color="info" className="py-2 px-3 small">
+                <i className="fa fa-spinner fa-spin" aria-hidden="true" />{' '}
+                Analyzing {classStats.length} classes and relationships with{' '}
+                <strong>{aiConfig.model}</strong>...
+              </Alert>
+            )}
+
+            {aiReport ? (
+              <pre
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: '380px',
+                  overflow: 'auto',
+                  marginBottom: 0
+                }}
+              >
+                {aiReport}
+              </pre>
+            ) : !isAnalyzingAi && !aiError ? (
+              <div className="text-muted small py-4 text-center">
+                Click <strong>Analyze Schema</strong> to get class relationship
+                summaries, index recommendations, and schema design notes.
+              </div>
+            ) : null}
+          </div>
         )}
       </ModalBody>
       <ModalFooter>

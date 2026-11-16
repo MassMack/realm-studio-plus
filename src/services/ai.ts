@@ -534,3 +534,85 @@ export async function generateRealmQuery(params: {
     cleanup();
   }
 }
+
+export async function analyzeSchemaWithAi(params: {
+  classes: Realm.ObjectSchema[];
+  objectCounts: Record<string, number>;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const config = settings.getAiSettings();
+  const apiKey = getAiApiKey(config.provider);
+
+  const schemaLines: string[] = [];
+  for (const schema of params.classes) {
+    if (schema.name.startsWith('__')) {
+      continue;
+    }
+    const kind = schema.embedded
+      ? 'Embedded'
+      : schema.asymmetric
+        ? 'Asymmetric'
+        : 'Standard';
+    const count = schema.embedded
+      ? 'N/A (embedded)'
+      : `${params.objectCounts[schema.name] ?? 0} rows`;
+    const pk = schema.primaryKey ? `, primaryKey: ${schema.primaryKey}` : '';
+    schemaLines.push(`Class ${schema.name} [${kind}, ${count}${pk}]:`);
+    for (const [propName, rawProp] of Object.entries(schema.properties)) {
+      const prop =
+        typeof rawProp === 'string'
+          ? ({ type: rawProp } as Realm.ObjectSchemaProperty)
+          : (rawProp as Realm.ObjectSchemaProperty);
+      const target = prop.objectType ? `<${prop.objectType}>` : '';
+      const flags = [
+        prop.optional ? 'optional' : 'required',
+        prop.indexed ? 'indexed' : ''
+      ]
+        .filter(Boolean)
+        .join(', ');
+      schemaLines.push(`  - ${propName}: ${prop.type}${target} (${flags})`);
+    }
+  }
+
+  const systemPrompt = [
+    'You are a senior Realm Database Architect.',
+    'Analyze the given Realm schema (no actual row data is provided) and reply concisely in Thai with clear bullet points under these 3 headings:',
+    '1. สรุปความสัมพันธ์ของ Class (Relationships)',
+    '2. แนะนำการเพิ่ม Index เพื่อความเร็ว (Index Recommendations)',
+    '3. ข้อสังเกตและแนวทางปรับปรุง Schema (Schema Notes)',
+    'Only reference class names and property names that actually exist in the schema.'
+  ].join('\n');
+
+  const userPrompt = `Realm Schema:\n${schemaLines.join('\n')}`;
+
+  const effectiveTimeout = Math.max(config.timeoutMs, 45000);
+  const { signal, cleanup, didTimeout } = createTimeoutSignal(
+    effectiveTimeout,
+    params.signal
+  );
+
+  try {
+    const reply = await callAiProvider(
+      config,
+      apiKey,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      signal
+    );
+    if (!reply) {
+      throw new Error('AI returned an empty analysis.');
+    }
+    return reply;
+  } catch (err) {
+    if (didTimeout()) {
+      throw new Error(
+        `AI Schema analysis timed out after ${Math.round(effectiveTimeout / 1000)}s.`
+      );
+    }
+    throw err;
+  } finally {
+    cleanup();
+  }
+}
