@@ -18,55 +18,67 @@
 
 @import "~realm-studio-styles/variables";
 
-$history-panel-icon-size: 20px;
+$history-panel-icon-size: 22px;
 
 .Greeting {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
-
-  &__ActionsPanel,
-  &__HistoryPanel {
-    padding: $spacer * 1.9;
-  }
+  overflow: hidden;
 
   &__ActionsPanel {
     align-items: center;
     background: var(--rs-window-bg);
+    border-right: 1px solid var(--rs-border);
     display: flex;
-    flex-basis: 60%;
+    flex: 0 0 300px;
     flex-direction: column;
-    flex-shrink: 0;
-    justify-content: space-around;
+    justify-content: space-between;
+    padding: ($spacer * 2) ($spacer * 1.5);
   }
 
   &__Brand {
     align-items: center;
     display: flex;
     flex-direction: column;
+    text-align: center;
+    width: 100%;
+  }
+
+  &__Logo {
+    width: 76px;
   }
 
   &__Title {
-    margin-top: $spacer;
+    font-weight: 600;
+    margin-bottom: $spacer * .15;
+    margin-top: $spacer * .75;
+  }
+
+  &__Version {
+    color: var(--rs-text-muted);
+    font-size: .8rem;
   }
 
   &__UpdateStatusIndicator {
     cursor: pointer;
-    font-size: .8rem;
-    width: 80%;
+    font-size: .75rem;
+    margin-top: $spacer * .25;
+    width: 100%;
 
     &--busy {
       cursor: wait;
     }
 
     &__Status {
+      color: var(--rs-text-muted);
       margin: 0;
-      padding: $spacer * .25;
+      padding: $spacer * .15;
       text-align: center;
     }
 
     &__Icon {
-      margin-right: $spacer * .5;
+      margin-right: $spacer * .35;
     }
 
     &__Progress {
@@ -78,62 +90,71 @@ $history-panel-icon-size: 20px;
     }
 
     &__Bar {
-      // The .25s matches the delay constant in updater.ts
       transition: width .25s linear;
     }
   }
 
   &__Actions {
-    align-items: center;
+    align-items: stretch;
     display: flex;
     flex-direction: column;
+    gap: $spacer * .55;
+    width: 100%;
   }
 
-  &__SecondaryActions {
-    display: flex;
-
-    & > * {
-      margin: 0 ($spacer * .25);
-    }
-  }
-
-  &__Action {
-    flex-basis: 2.5 * $spacer;
-    margin-bottom: $spacer * .75;
+  &__ActionBtn {
+    align-items: center;
+    display: inline-flex;
+    gap: $spacer * .45;
+    justify-content: center;
+    width: 100%;
   }
 
   &__DownloadDemo {
-    font-size: .7rem;
-    margin-top: $spacer * .5;
+    color: var(--rs-text-muted);
+    font-size: .75rem;
+    text-align: center;
   }
 
   &__HistoryPanel {
     background: var(--rs-panel-bg);
     color: var(--rs-panel-color);
     display: flex;
+    flex: 1 1 0;
     flex-direction: column;
-    flex-grow: 1;
-    font-size: .9rem;
+    font-size: .88rem;
     min-height: 0;
+    min-width: 0;
+    padding: ($spacer * 1.25) ($spacer * 1.5);
 
     a {
       color: var(--rs-panel-color);
     }
 
+    &__HeaderRow {
+      align-items: center;
+      border-bottom: 1px solid var(--rs-border);
+      display: flex;
+      flex-shrink: 0;
+      justify-content: space-between;
+      margin-bottom: $spacer * .65;
+      padding-bottom: $spacer * .5;
+    }
+
     &__Header {
       color: var(--rs-panel-header);
-      flex-shrink: 0;
       font-size: .75rem;
       font-weight: 600;
-      letter-spacing: .05em;
-      margin: 0 0 $spacer * .5;
+      letter-spacing: .06em;
+      margin: 0;
       text-transform: uppercase;
     }
 
     &__List {
       display: flex;
-      flex: 1;
+      flex: 1 1 0;
       flex-direction: column;
+      gap: $spacer * .25;
       min-height: 0;
       overflow-y: auto;
 
@@ -157,17 +178,20 @@ $history-panel-icon-size: 20px;
 
     &__Entry {
       align-items: center;
-      border-radius: $spacer * .25;
+      border: 1px solid transparent;
+      border-radius: .35rem;
       display: flex;
-      padding: $spacer * .4 $spacer * .5;
-      transition: background-color .15s ease;
+      padding: ($spacer * .5) ($spacer * .65);
+      transition: background-color .15s ease, border-color .15s ease;
 
       &--clickable {
         cursor: pointer;
 
         &:hover {
           background: var(--rs-panel-hover);
+          border-color: var(--rs-border);
 
+          .Greeting__HistoryPanel__Action,
           .Greeting__HistoryPanel__Remove {
             opacity: 1;
           }
@@ -176,17 +200,17 @@ $history-panel-icon-size: 20px;
     }
 
     &__Icon {
+      color: var(--rs-accent);
       flex-shrink: 0;
       height: $history-panel-icon-size;
-      margin-right: $spacer * .6;
+      margin-right: $spacer * .65;
       width: $history-panel-icon-size;
 
       &--fa {
         align-items: center;
         display: inline-flex;
-        font-size: $history-panel-icon-size * .9;
+        font-size: $history-panel-icon-size * .85;
         justify-content: center;
-        opacity: .75;
       }
     }
 
@@ -197,6 +221,7 @@ $history-panel-icon-size: 20px;
     }
 
     &__Name {
+      font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -205,7 +230,7 @@ $history-panel-icon-size: 20px;
     &__Path {
       color: var(--rs-panel-muted);
       direction: rtl;
-      font-size: .7rem;
+      font-size: .72rem;
       overflow: hidden;
       text-align: left;
       text-overflow: ellipsis;
@@ -213,25 +238,30 @@ $history-panel-icon-size: 20px;
       white-space: nowrap;
     }
 
+    &__Action,
     &__Remove {
       background: transparent;
       border: 0;
       color: var(--rs-panel-header);
       cursor: pointer;
       flex-shrink: 0;
-      margin-left: $spacer * .25;
+      margin-left: $spacer * .15;
       opacity: 0;
-      padding: $spacer * .25 $spacer * .4;
+      padding: ($spacer * .25) ($spacer * .4);
       transition: color .15s ease, opacity .15s ease;
-
-      &:hover {
-        color: $sexy-salmon;
-      }
 
       &:focus {
         opacity: 1;
         outline: none;
       }
+    }
+
+    &__Action:hover {
+      color: var(--rs-accent);
+    }
+
+    &__Remove:hover {
+      color: $sexy-salmon;
     }
 
     &__Empty {
@@ -242,17 +272,15 @@ $history-panel-icon-size: 20px;
       flex-direction: column;
       flex-grow: 1;
       justify-content: center;
-      padding: $spacer * .5;
+      padding: $spacer;
       text-align: center;
       user-select: none;
-
-      a {
-        text-decoration: underline;
-      }
     }
-  }
 
-  &__Logo {
-    width: 90px;
+    &__EmptyIcon {
+      font-size: 2rem;
+      margin-bottom: $spacer * .5;
+      opacity: .5;
+    }
   }
 }

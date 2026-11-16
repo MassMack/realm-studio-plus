@@ -85,7 +85,10 @@ export const Greeting = ({
       const files = Array.from(e.dataTransfer.files);
       const paths = files
         .map((f) => {
-          if (electron.webUtils && typeof electron.webUtils.getPathForFile === 'function') {
+          if (
+            electron.webUtils &&
+            typeof electron.webUtils.getPathForFile === 'function'
+          ) {
             return electron.webUtils.getPathForFile(f);
           }
           return (f as File & { path?: string }).path ?? '';
@@ -99,59 +102,60 @@ export const Greeting = ({
         <svg className="Greeting__Logo" viewBox={realmLogo.viewBox}>
           <use xlinkHref={`#${realmLogo.id}`} />
         </svg>
-        <h3 className="Greeting__Title">{app.name}</h3>
-        <div>Version {version}</div>
+        <h4 className="Greeting__Title">{app.name}</h4>
+        <div className="Greeting__Version">Version {version}</div>
+        <UpdateStatusIndicator
+          status={updateStatus}
+          onCheckForUpdates={onCheckForUpdates}
+        />
       </div>
-      <UpdateStatusIndicator
-        status={updateStatus}
-        onCheckForUpdates={onCheckForUpdates}
-      />
+
       <div className="Greeting__Actions">
-        <div className="Greeting__Action">
-          <Button color="primary" onClick={onOpenLocalRealm}>
-            <i className="fa fa-folder-open" aria-hidden="true" /> Open Realm
-            file
-          </Button>
-        </div>
+        <Button
+          color="primary"
+          className="Greeting__ActionBtn"
+          onClick={onOpenLocalRealm}
+        >
+          <i className="fa fa-folder-open" aria-hidden="true" /> Open Realm file
+        </Button>
         {process.platform === 'darwin' && onFindSimulatorRealms ? (
-          <div className="Greeting__Action mt-2">
-            <Button
-              color="secondary"
-              size="sm"
-              onClick={onFindSimulatorRealms}
-              title="Scan ~/Library/Developer/CoreSimulator for .realm files"
-            >
-              <i className="fa fa-apple" aria-hidden="true" /> Find in iOS
-              Simulators
-            </Button>
-          </div>
+          <Button
+            color="secondary"
+            size="sm"
+            className="Greeting__ActionBtn"
+            onClick={onFindSimulatorRealms}
+            title="Scan ~/Library/Developer/CoreSimulator for .realm files"
+          >
+            <i className="fa fa-apple" aria-hidden="true" /> Find in iOS
+            Simulators
+          </Button>
         ) : null}
         {onFindAndroidRealms ? (
-          <div className="Greeting__Action mt-2">
-            <Button
-              color="secondary"
-              size="sm"
-              onClick={onFindAndroidRealms}
-              title="Pull .realm files from connected Android Emulator / ADB device"
-            >
-              <i className="fa fa-android" aria-hidden="true" /> Pull from
-              Android (ADB)
-            </Button>
-          </div>
+          <Button
+            color="secondary"
+            size="sm"
+            className="Greeting__ActionBtn"
+            onClick={onFindAndroidRealms}
+            title="Pull .realm files from connected Android Emulator / ADB device"
+          >
+            <i className="fa fa-android" aria-hidden="true" /> Pull from Android
+            (ADB)
+          </Button>
         ) : null}
       </div>
+
       <div className="Greeting__DownloadDemo">
         {isDraggingOver ? (
           <strong>Drop .realm file here to open</strong>
         ) : (
           <>
-            <span>Drag &amp; drop a file here or </span>
+            <div>Drag &amp; drop a .realm file anywhere</div>
             <button
               type="button"
               className="btn btn-link btn-sm p-0"
               onClick={onGenerateDemoRealm}
             >
-              open built-in Demo Realm
+              or open built-in Demo Realm
             </button>
           </>
         )}

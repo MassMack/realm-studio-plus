@@ -16,11 +16,20 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
+import { Badge } from 'reactstrap';
+
 import { HistoryEntry, IHistoryEntry } from './HistoryEntry';
 
 const Empty = () => (
   <div className="Greeting__HistoryPanel__Empty">
-    <p>No recently opened files</p>
+    <i
+      className="fa fa-clock-o Greeting__HistoryPanel__EmptyIcon"
+      aria-hidden="true"
+    />
+    <p className="mb-1">No recently opened Realm files</p>
+    <small>
+      Open a file on the left or drag &amp; drop a <code>.realm</code> file here
+    </small>
   </div>
 );
 
@@ -36,7 +45,14 @@ export const HistoryPanel = ({
   onRemove
 }: IHistoryPanelProps) => (
   <div className="Greeting__HistoryPanel">
-    <h6 className="Greeting__HistoryPanel__Header">Recently opened</h6>
+    <div className="Greeting__HistoryPanel__HeaderRow">
+      <h6 className="Greeting__HistoryPanel__Header">Recently opened</h6>
+      {entries.length > 0 ? (
+        <Badge color="secondary" pill>
+          {entries.length}
+        </Badge>
+      ) : null}
+    </div>
     <div className="Greeting__HistoryPanel__List">
       {entries.length === 0 ? (
         <Empty />
