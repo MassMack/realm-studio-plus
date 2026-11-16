@@ -28,6 +28,8 @@ import {
 } from '.';
 import { AddClassModal } from './AddClassModal';
 import { AddPropertyModal } from './AddPropertyModal';
+import { AiQueryModal } from './AiQueryModal';
+import { AiSettingsModal } from './AiSettingsModal';
 import {
   CommandPaletteModal,
   ICommandPaletteAction
@@ -68,6 +70,8 @@ export interface IRealmBrowserProps {
   importDialog: null | { filePaths: string[]; classNames: string[] };
   isAddClassOpen: boolean;
   isAddPropertyOpen: boolean;
+  isAiQueryOpen: boolean;
+  isAiSettingsOpen: boolean;
   isClassNameAvailable: (name: string) => boolean;
   isCommandPaletteOpen: boolean;
   isEncryptionDialogVisible: boolean;
@@ -81,6 +85,7 @@ export interface IRealmBrowserProps {
   };
   onAddClass: (schema: Realm.ObjectSchema) => void;
   onAddProperty: (name: string, type: Realm.PropertyType | string) => void;
+  onApplyAiQuery: (query: string) => void;
   onBack: () => void;
   onBreadcrumbClick: (index: number) => void;
   onCancelTransaction: () => void;
@@ -111,6 +116,8 @@ export interface IRealmBrowserProps {
   realm?: Realm;
   toggleAddClass: () => void;
   toggleAddClassProperty: () => void;
+  toggleAiQuery: () => void;
+  toggleAiSettings: () => void;
   toggleCommandPalette: () => void;
   toggleGlobalSearch: () => void;
   toggleOverview: () => void;
@@ -136,6 +143,8 @@ export const RealmBrowser = ({
   importDialog,
   isAddClassOpen,
   isAddPropertyOpen,
+  isAiQueryOpen,
+  isAiSettingsOpen,
   isClassNameAvailable,
   isCommandPaletteOpen,
   isEncryptionDialogVisible,
@@ -146,6 +155,7 @@ export const RealmBrowser = ({
   jsonViewerDialog,
   onAddClass,
   onAddProperty,
+  onApplyAiQuery,
   onBack,
   onBreadcrumbClick,
   onCancelTransaction,
@@ -169,6 +179,8 @@ export const RealmBrowser = ({
   realm,
   toggleAddClass,
   toggleAddClassProperty,
+  toggleAiQuery,
+  toggleAiSettings,
   toggleCommandPalette,
   toggleGlobalSearch,
   toggleOverview,
@@ -215,6 +227,7 @@ export const RealmBrowser = ({
               highlightMode={HighlightMode.Multiple}
               key={contentKey}
               onAddColumnClick={toggleAddClassProperty}
+              onAskAi={toggleAiQuery}
               onCancelTransaction={onCancelTransaction}
               onClassFocussed={onClassFocussed}
               onCommitTransaction={onCommitTransaction}
@@ -268,6 +281,27 @@ export const RealmBrowser = ({
         actions={commandPaletteActions}
         isOpen={isCommandPaletteOpen}
         toggle={toggleCommandPalette}
+      />
+
+      <AiQueryModal
+        activeClassName={
+          focus
+            ? focus.kind === 'class'
+              ? focus.className
+              : focus.property.objectType
+            : undefined
+        }
+        classes={classes}
+        currentQuery=""
+        isOpen={isAiQueryOpen}
+        onApplyQuery={onApplyAiQuery}
+        onOpenSettings={toggleAiSettings}
+        toggle={toggleAiQuery}
+      />
+
+      <AiSettingsModal
+        isOpen={isAiSettingsOpen}
+        toggle={toggleAiSettings}
       />
 
       {focus && focus.kind === 'class' ? (

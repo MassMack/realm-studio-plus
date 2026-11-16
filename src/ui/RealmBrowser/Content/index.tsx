@@ -123,6 +123,7 @@ export interface IBaseContentContainerProps {
   editMode: EditMode;
   focus: Focus;
   highlightMode: HighlightMode;
+  onAskAi?: () => void;
   onCellClick?: CellClickHandler;
   onCellDoubleClick?: CellClickHandler;
   onCellSingleClick?: CellClickHandler;
@@ -432,6 +433,7 @@ class ContentContainer extends React.Component<
       focus,
       hiddenColumns: this.state.hiddenColumns,
       highlight: this.state.highlight,
+      onAskAi: this.props.onAskAi,
       onCellChange: this.onCellChange,
       onCellClick: this.onCellClick,
       onCellHighlighted: this.onCellHighlighted,
@@ -497,6 +499,14 @@ class ContentContainer extends React.Component<
 
   private onCancelSelectObjectDialog = () => {
     this.setState({ selectObjectDialog: { isOpen: false } });
+  };
+
+  public setQuery = (query: string) => {
+    this.onQueryChange(query);
+  };
+
+  public getQuery = (): string => {
+    return this.state.query;
   };
 
   private onQueryChange = (query: string) => {

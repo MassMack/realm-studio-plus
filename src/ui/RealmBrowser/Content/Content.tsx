@@ -68,6 +68,7 @@ interface IBaseContentProps {
   hiddenColumns?: string[];
   highlight?: IHighlight;
   onAddColumnClick?: () => void;
+  onAskAi?: () => void;
   onCellChange: CellChangeHandler;
   onCellClick: CellClickHandler;
   onCellHighlighted: CellHighlightedHandler;
@@ -129,6 +130,7 @@ export const Content = ({
   hiddenColumns,
   highlight,
   onAddColumnClick,
+  onAskAi,
   onCellChange,
   onCellClick,
   onCellHighlighted,
@@ -170,6 +172,7 @@ export const Content = ({
         filteredCount={filteredCount}
         focus={focus}
         hiddenColumns={hiddenColumns}
+        onAskAi={onAskAi}
         onDeleteFilteredRows={onDeleteFilteredRows}
         onExportView={onExportView}
         onGenerateMockRows={onGenerateMockRows}

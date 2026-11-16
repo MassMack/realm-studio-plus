@@ -126,6 +126,8 @@ export interface IRealmBrowserState extends IRealmLoadingComponentState {
   historyIndex: number;
   isAddClassOpen: boolean;
   isAddPropertyOpen: boolean;
+  isAiQueryOpen: boolean;
+  isAiSettingsOpen: boolean;
   isCommandPaletteOpen: boolean;
   isEncryptionDialogVisible: boolean;
   isGlobalSearchOpen: boolean;
@@ -156,6 +158,8 @@ class RealmBrowserContainer
     historyIndex: -1,
     isAddClassOpen: false,
     isAddPropertyOpen: false,
+    isAiQueryOpen: false,
+    isAiSettingsOpen: false,
     isCommandPaletteOpen: false,
     isEncryptionDialogVisible: false,
     isGlobalSearchOpen: false,
@@ -237,6 +241,8 @@ class RealmBrowserContainer
         jsonViewerDialog={this.state.jsonViewerDialog}
         isAddClassOpen={this.state.isAddClassOpen}
         isAddPropertyOpen={this.state.isAddPropertyOpen}
+        isAiQueryOpen={this.state.isAiQueryOpen}
+        isAiSettingsOpen={this.state.isAiSettingsOpen}
         isClassNameAvailable={this.isClassNameAvailable}
         isCommandPaletteOpen={this.state.isCommandPaletteOpen}
         isEncryptionDialogVisible={this.state.isEncryptionDialogVisible}
@@ -246,6 +252,7 @@ class RealmBrowserContainer
         isPropertyNameAvailable={this.isPropertyNameAvailable}
         onAddClass={this.onAddClass}
         onAddProperty={this.onAddProperty}
+        onApplyAiQuery={this.onApplyAiQuery}
         onBack={this.onNavigateBack}
         onBreadcrumbClick={this.onBreadcrumbClick}
         onCancelTransaction={this.onCancelTransaction}
@@ -269,6 +276,8 @@ class RealmBrowserContainer
         realm={this.realm}
         toggleAddClass={this.toggleAddClass}
         toggleAddClassProperty={this.toggleAddClassProperty}
+        toggleAiQuery={this.toggleAiQuery}
+        toggleAiSettings={this.toggleAiSettings}
         toggleCommandPalette={this.toggleCommandPalette}
         toggleGlobalSearch={this.toggleGlobalSearch}
         toggleOverview={this.toggleOverview}
@@ -638,6 +647,24 @@ class RealmBrowserContainer
     });
   };
 
+  private toggleAiQuery = () => {
+    this.setState((prev) => ({
+      isAiQueryOpen: !prev.isAiQueryOpen
+    }));
+  };
+
+  private toggleAiSettings = () => {
+    this.setState((prev) => ({
+      isAiSettingsOpen: !prev.isAiSettingsOpen
+    }));
+  };
+
+  private onApplyAiQuery = (query: string) => {
+    if (this.contentInstance) {
+      this.contentInstance.setQuery(query);
+    }
+  };
+
   private toggleCommandPalette = () => {
     this.setState({
       isCommandPaletteOpen: !this.state.isCommandPaletteOpen
@@ -658,6 +685,18 @@ class RealmBrowserContainer
       });
     }
     actions.push(
+      {
+        id: 'action:ask-ai',
+        category: 'AI',
+        label: 'Ask AI: Natural Language to Realm Query (⌘⇧A)',
+        run: () => this.setState({ isAiQueryOpen: true })
+      },
+      {
+        id: 'action:ai-settings',
+        category: 'AI',
+        label: 'AI Assistant Settings (Ollama / Gemini / OpenAI / Claude)...',
+        run: () => this.setState({ isAiSettingsOpen: true })
+      },
       {
         id: 'action:global-search',
         category: 'Action',
@@ -1579,6 +1618,17 @@ class RealmBrowserContainer
     if (isGlobalSearchShortcut) {
       e.preventDefault();
       this.setState({ isGlobalSearchOpen: true });
+      return;
+    }
+
+    const isAskAiShortcut =
+      (e.metaKey || e.ctrlKey) &&
+      e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === 'a';
+    if (isAskAiShortcut) {
+      e.preventDefault();
+      this.setState({ isAiQueryOpen: true });
       return;
     }
 

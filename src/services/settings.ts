@@ -37,6 +37,45 @@ import ElectronStore from 'electron-store';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+export type AiProvider = 'ollama' | 'gemini' | 'openai' | 'anthropic';
+
+export const AI_PROVIDERS: readonly AiProvider[] = [
+  'ollama',
+  'gemini',
+  'openai',
+  'anthropic'
+];
+
+export const AI_PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
+  ollama: 'Ollama (Local / Private)',
+  gemini: 'Google Gemini',
+  openai: 'OpenAI / Compatible (LM Studio)',
+  anthropic: 'Anthropic Claude'
+};
+
+export const DEFAULT_AI_MODELS: Readonly<Record<AiProvider, string>> = {
+  ollama: 'qwen2.5:7b',
+  gemini: 'gemini-2.5-flash',
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-sonnet-4-20250514'
+};
+
+export interface IAiSettings {
+  provider: AiProvider;
+  model: string;
+  ollamaUrl: string;
+  openaiBaseUrl: string;
+  timeoutMs: number;
+}
+
+export const DEFAULT_AI_SETTINGS: IAiSettings = {
+  provider: 'ollama',
+  model: DEFAULT_AI_MODELS.ollama,
+  ollamaUrl: 'http://127.0.0.1:11434',
+  openaiBaseUrl: 'https://api.openai.com/v1',
+  timeoutMs: 20000
+};
+
 /** All valid theme modes, in the order they should be presented to the user */
 export const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark'];
 
@@ -52,10 +91,15 @@ export interface ISettings {
    * light / dark preference.
    */
   theme: ThemeMode;
+  /**
+   * AI assistant configuration (non-secret; API keys are stored encrypted separately).
+   */
+  ai: IAiSettings;
 }
 
 export const DEFAULT_SETTINGS: ISettings = {
-  theme: 'dark'
+  theme: 'dark',
+  ai: { ...DEFAULT_AI_SETTINGS }
 };
 
 /** Becomes `settings.json` in the user data directory */
@@ -65,6 +109,38 @@ type RemovalCallback = () => void;
 
 export function isThemeMode(value: unknown): value is ThemeMode {
   return THEME_MODES.includes(value as ThemeMode);
+}
+
+export function isAiProvider(value: unknown): value is AiProvider {
+  return AI_PROVIDERS.includes(value as AiProvider);
+}
+
+function normalizeAiSettings(raw: unknown): IAiSettings {
+  const obj =
+    raw && typeof raw === 'object' ? (raw as Partial<IAiSettings>) : {};
+  const provider = isAiProvider(obj.provider)
+    ? obj.provider
+    : DEFAULT_AI_SETTINGS.provider;
+  const model =
+    typeof obj.model === 'string' && obj.model.trim()
+      ? obj.model.trim()
+      : DEFAULT_AI_MODELS[provider];
+  const ollamaUrl =
+    typeof obj.ollamaUrl === 'string' && obj.ollamaUrl.trim()
+      ? obj.ollamaUrl.trim().replace(/\/+$/, '')
+      : DEFAULT_AI_SETTINGS.ollamaUrl;
+  const openaiBaseUrl =
+    typeof obj.openaiBaseUrl === 'string' && obj.openaiBaseUrl.trim()
+      ? obj.openaiBaseUrl.trim().replace(/\/+$/, '')
+      : DEFAULT_AI_SETTINGS.openaiBaseUrl;
+  const timeoutMs =
+    typeof obj.timeoutMs === 'number' &&
+    Number.isFinite(obj.timeoutMs) &&
+    obj.timeoutMs >= 3000 &&
+    obj.timeoutMs <= 120000
+      ? obj.timeoutMs
+      : DEFAULT_AI_SETTINGS.timeoutMs;
+  return { provider, model, ollamaUrl, openaiBaseUrl, timeoutMs };
 }
 
 /**
@@ -132,6 +208,24 @@ class Settings {
   ): RemovalCallback {
     return this.backend.onDidChange('theme', (newValue) => {
       callback(isThemeMode(newValue) ? newValue : DEFAULT_SETTINGS.theme);
+    });
+  }
+
+  public getAiSettings(): IAiSettings {
+    return normalizeAiSettings(this.backend.get('ai'));
+  }
+
+  public setAiSettings(next: Partial<IAiSettings>): IAiSettings {
+    const merged = normalizeAiSettings({ ...this.getAiSettings(), ...next });
+    this.backend.set('ai', merged);
+    return merged;
+  }
+
+  public onDidChangeAiSettings(
+    callback: (ai: IAiSettings) => void
+  ): RemovalCallback {
+    return this.backend.onDidChange('ai', (newValue) => {
+      callback(normalizeAiSettings(newValue));
     });
   }
 }

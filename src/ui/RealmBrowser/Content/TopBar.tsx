@@ -30,6 +30,7 @@ interface ITopBarProps {
   filteredCount?: number;
   focus: Focus;
   hiddenColumns?: string[];
+  onAskAi?: () => void;
   onDeleteFilteredRows?: () => void;
   onExportView?: (format: 'json' | 'csv') => void;
   onGenerateMockRows?: (count: number) => void;
@@ -50,12 +51,14 @@ interface ITopBarProps {
 
 const isMac = process.platform === 'darwin';
 const findShortcutHint = isMac ? '⌘F' : 'Ctrl+F';
+const aiShortcutHint = isMac ? '⌘⇧A' : 'Ctrl+Shift+A';
 
 export const TopBar = ({
   allProperties,
   filteredCount,
   focus,
   hiddenColumns = [],
+  onAskAi,
   onDeleteFilteredRows,
   onExportView,
   onGenerateMockRows,
@@ -208,6 +211,17 @@ export const TopBar = ({
         queryError={queryError}
         placeholder={`Quick search text/ID or enter RQL query (${findShortcutHint})`}
       />
+      {onAskAi ? (
+        <Button
+          size="sm"
+          color="primary"
+          className="RealmBrowser__Topbar__Button"
+          onClick={onAskAi}
+          title={`Ask AI to write Realm Query (${aiShortcutHint})`}
+        >
+          <i className="fa fa-magic" aria-hidden="true" /> Ask AI
+        </Button>
+      ) : null}
       {typeof filteredCount === 'number' && typeof totalCount === 'number' ? (
         <span
           className="RealmBrowser__Topbar__Count"
