@@ -61,6 +61,9 @@ import {
   RowMouseDownHandler
 } from './Table';
 
+/** Pointer must travel this far (with the button held) before a click turns into a drag-select */
+const DRAG_SELECT_THRESHOLD_PX = 5;
+
 export enum EditMode {
   Disabled = 'disabled',
   InputBlur = 'input-blur',
@@ -322,8 +325,19 @@ class ContentContainer extends React.Component<
   );
 
   private contentElement: HTMLElement | null = null;
-  // Used to save the initial vertical coordinate when the user starts dragging to select rows
-  private rowDragStart: { offset: number; rowIndex: number } | undefined;
+  // Pending / active drag-to-select gesture. `active` flips to true only once
+  // the pointer has moved beyond DRAG_SELECT_THRESHOLD_PX with the button held.
+  private rowDragStart:
+    | {
+        offset: number;
+        rowIndex: number;
+        startX: number;
+        startY: number;
+        active: boolean;
+      }
+    | undefined;
+  // Anchor row for Shift+Click range selection (kept separate from drag state)
+  private selectionAnchor: number | undefined;
 
   public componentDidUpdate(
     prevProps: IContentContainerProps,
@@ -363,8 +377,13 @@ class ContentContainer extends React.Component<
     );
   }
 
+  public componentDidMount() {
+    document.addEventListener('keydown', this.onDocumentKeyDown);
+  }
+
   public componentWillUnmount() {
-    document.removeEventListener('mouseup', this.onRowMouseUp);
+    this.endRowDrag();
+    document.removeEventListener('keydown', this.onDocumentKeyDown);
     if (this.removeStoreListener) {
       this.removeStoreListener();
     }
@@ -2265,66 +2284,132 @@ class ContentContainer extends React.Component<
           rows.delete(rowIndex);
         } else {
           rows.add(rowIndex);
+          this.selectionAnchor = rowIndex;
         }
         this.setState({
           highlight: { rows }
         });
       } else if (e.button === 0 && e.shiftKey) {
         // The user wants to select since the previous selection
-        if (this.rowDragStart !== undefined) {
-          const rowIndexRange = getRange(this.rowDragStart.rowIndex, rowIndex);
+        if (this.selectionAnchor !== undefined) {
+          const rowIndexRange = getRange(this.selectionAnchor, rowIndex);
           for (const i of rowIndexRange) {
             rows.add(i);
           }
+        } else {
+          rows.add(rowIndex);
+          this.selectionAnchor = rowIndex;
         }
         this.setState({ highlight: { rows } });
       } else if (e.button === 0 && focus.kind !== 'list') {
-        // The user left-clicked on a non-list row
-        this.contentElement.addEventListener('mousemove', this.onRowMouseMove);
-        document.addEventListener('mouseup', this.onRowMouseUp);
-        const rect = e.currentTarget.getBoundingClientRect();
-        this.rowDragStart = {
-          offset: rect.top,
-          rowIndex
-        };
-        // Highlight the row
+        // The user left-clicked on a non-list row: select it, and arm a
+        // drag-select that only activates after the pointer moves past the threshold.
+        this.endRowDrag();
+        this.selectionAnchor = rowIndex;
         this.setState({ highlight: { rows: new Set([rowIndex]) } });
+        // Double-clicks (e.g. to edit a cell) never start a drag
+        if (e.detail < 2) {
+          const rect = e.currentTarget.getBoundingClientRect();
+          this.rowDragStart = {
+            offset: rect.top,
+            rowIndex,
+            startX: e.clientX,
+            startY: e.clientY,
+            active: false
+          };
+          document.addEventListener('mousemove', this.onRowMouseMove);
+          document.addEventListener('mouseup', this.onRowMouseUp, true);
+          window.addEventListener('blur', this.onRowMouseUp);
+        }
       } else if (e.button === 0 && focus.kind === 'list') {
         // The user left-clicked on a list row - highlight it
+        this.selectionAnchor = rowIndex;
         this.setState({ highlight: { rows: new Set([rowIndex]) } });
-      } else if (e.button === 2 && rows.size === 0) {
-        // Right clicked when nothing was highlighted:
-        // Select the row but don't start a drag
-        this.setState({ highlight: { rows: new Set([rowIndex]) } });
+      } else if (e.button === 2) {
+        // Right click always ends any pending drag
+        this.endRowDrag();
+        if (rows.size === 0) {
+          // Select the row but don't start a drag
+          this.selectionAnchor = rowIndex;
+          this.setState({ highlight: { rows: new Set([rowIndex]) } });
+        }
       }
     } else if (highlightMode === HighlightMode.Single) {
       this.setState({ highlight: { rows: new Set([rowIndex]) } });
     }
   };
 
+  private endRowDrag() {
+    this.rowDragStart = undefined;
+    document.removeEventListener('mousemove', this.onRowMouseMove);
+    document.removeEventListener('mouseup', this.onRowMouseUp, true);
+    window.removeEventListener('blur', this.onRowMouseUp);
+  }
+
   private onRowMouseUp = () => {
-    // If the table element is known, remove the move listener from it
-    if (this.contentElement) {
-      this.contentElement.removeEventListener('mousemove', this.onRowMouseMove);
+    this.endRowDrag();
+  };
+
+  private onDocumentKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !this.state.highlight) {
+      return;
     }
+    // Don't steal Escape from inputs (cell editors, search, dialogs)
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('.modal'))
+    ) {
+      return;
+    }
+    this.endRowDrag();
+    this.selectionAnchor = undefined;
+    this.onResetHighlight();
   };
 
   private onRowMouseMove = (e: MouseEvent) => {
-    if (this.rowDragStart) {
-      const { offset, rowIndex } = this.rowDragStart;
-      const offsetRelative = e.clientY - offset;
-      const offsetIndex = Math.floor(offsetRelative / rowHeights.content);
-      const hoveredIndex = rowIndex + offsetIndex;
-      // Compute the set of highlighted row indices
-      const minIndex = Math.min(rowIndex, hoveredIndex);
-      const maxIndex = Math.max(rowIndex, hoveredIndex);
-      const rows = new Set<number>();
-      for (let i = minIndex; i <= maxIndex; i++) {
-        rows.add(i);
-      }
-      // Highlight the rows
-      this.setState({ highlight: { rows } });
+    const drag = this.rowDragStart;
+    if (!drag) {
+      return;
     }
+    // Self-heal: the button is no longer held (mouseup was missed somewhere)
+    if ((e.buttons & 1) === 0) {
+      this.endRowDrag();
+      return;
+    }
+    if (!drag.active) {
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (Math.hypot(dx, dy) < DRAG_SELECT_THRESHOLD_PX) {
+        return;
+      }
+      drag.active = true;
+    }
+    const { offset, rowIndex } = drag;
+    const offsetRelative = e.clientY - offset;
+    const offsetIndex = Math.floor(offsetRelative / rowHeights.content);
+    const hoveredIndex = Math.max(0, rowIndex + offsetIndex);
+    // Compute the set of highlighted row indices
+    const minIndex = Math.min(rowIndex, hoveredIndex);
+    const maxIndex = Math.max(rowIndex, hoveredIndex);
+    const current = this.state.highlight?.rows;
+    if (
+      current &&
+      current.size === maxIndex - minIndex + 1 &&
+      current.has(minIndex) &&
+      current.has(maxIndex)
+    ) {
+      return; // unchanged - avoid a re-render per pixel
+    }
+    const rows = new Set<number>();
+    for (let i = minIndex; i <= maxIndex; i++) {
+      rows.add(i);
+    }
+    // Highlight the rows
+    this.setState({ highlight: { rows } });
   };
 
   private onNewObjectClick = () => {
