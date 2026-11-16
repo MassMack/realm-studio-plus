@@ -8,7 +8,7 @@
     "email": "info@realm.io",
     "url": "https://realm.io"
   },
-  "repository": "https://github.com/jooy2/realm-studio-plus",
+  "repository": "https://github.com/MassMack/realm-studio-plus",
   "license": "Apache-2.0",
   "main": "./build/main.bundle.js",
   "build": {
@@ -111,7 +111,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "jooy2",
+        "owner": "MassMack",
         "repo": "realm-studio-plus"
       }
     ],
