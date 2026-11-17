@@ -16,9 +16,28 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
-import { startRealmMcpServer } from './server';
+import { createRealmMcpServer } from './server';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-startRealmMcpServer().catch((err) => {
+async function main() {
+  const server = createRealmMcpServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error('Realm Studio Plus MCP server running on stdio (read-only)');
+
+  // Realm's native C++ runtime can keep libuv handles alive after files are
+  // closed; exit explicitly when the MCP client closes stdin to avoid zombies.
+  const shutdown = () => {
+    setTimeout(() => process.exit(0), 50).unref();
+    void server.close().finally(() => process.exit(0));
+  };
+  process.stdin.once('end', shutdown);
+  process.stdin.once('close', shutdown);
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}
+
+main().catch((err) => {
   console.error('Fatal error starting Realm Studio Plus MCP server:', err);
   process.exit(1);
 });

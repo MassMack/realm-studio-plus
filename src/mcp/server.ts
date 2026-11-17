@@ -17,7 +17,6 @@
 ////////////////////////////////////////////////////////////////////////////
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
 import {
@@ -249,11 +248,4 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
   );
 
   return server;
-}
-
-export async function startRealmMcpServer(version = '20.2.0'): Promise<void> {
-  const server = createRealmMcpServer(version);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('Realm Studio Plus MCP server running on stdio (read-only)');
 }
