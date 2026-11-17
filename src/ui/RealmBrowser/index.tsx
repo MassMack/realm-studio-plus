@@ -23,6 +23,11 @@ import path from 'path';
 import Realm from 'realm';
 import { flushSync } from 'react-dom';
 
+import {
+  registerOpenRealmSession,
+  unregisterOpenRealmSession,
+  updateOpenRealmSession
+} from '../../services/active-realms';
 import { DataExporter, DataExportFormat } from '../../services/data-exporter';
 import * as dataImporter from '../../services/data-importer';
 import {
@@ -49,6 +54,7 @@ import { extractObjectIdentifier, IObjectIdentifier } from './display';
 import {
   Focus,
   generateKey,
+  getClassName,
   IClassFocus,
   IListFocus,
   ISingleObjectFocus
@@ -183,6 +189,7 @@ class RealmBrowserContainer
   private reloadAttemptTimestamps: number[] = [];
   private watcherDisabled = false;
   private isReloading = false;
+  private readonly activeSessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   private untriedCandidateKeys: string[] | null = null;
   private pendingEncryptionSave?: {
     key: string;
@@ -199,6 +206,7 @@ class RealmBrowserContainer
   }
 
   public componentWillUnmount() {
+    unregisterOpenRealmSession(this.activeSessionId);
     super.componentWillUnmount();
     this.removeListeners();
     this.stopWatchingRealmFile();
@@ -556,6 +564,24 @@ class RealmBrowserContainer
     const firstSchemaName = this.realm.schema.find(
       (c) => c.name.indexOf('__') !== 0 && !c.embedded
     )?.name;
+
+    const rawKey = this.props.realm.encryptionKey;
+    let sessionKeyHex: string | undefined;
+    if (rawKey) {
+      const view = ArrayBuffer.isView(rawKey)
+        ? new Uint8Array(rawKey.buffer, rawKey.byteOffset, rawKey.byteLength)
+        : new Uint8Array(rawKey as ArrayBuffer);
+      if (view.byteLength === 64) {
+        sessionKeyHex = Buffer.from(view).toString('hex');
+      }
+    }
+    registerOpenRealmSession({
+      id: this.activeSessionId,
+      path: this.realm.path,
+      activeClassName: firstSchemaName,
+      schemaVersion: this.realm.schemaVersion,
+      encryptionKeyHex: sessionKeyHex
+    });
 
     if (firstSchemaName) {
       this.onClassFocussed(firstSchemaName);
@@ -941,6 +967,10 @@ class RealmBrowserContainer
           historyIndex: nextIndex
         },
         () => {
+          updateOpenRealmSession(this.activeSessionId, {
+            activeClassName: getClassName(focus),
+            focusedAt: Date.now()
+          });
           if (
             highlightedObject &&
             highlightedObject.isValid() &&
@@ -1590,6 +1620,8 @@ class RealmBrowserContainer
             });
           }
         });
+    } else {
+      unregisterOpenRealmSession(this.activeSessionId);
     }
   };
 
@@ -1668,9 +1700,14 @@ class RealmBrowserContainer
     }
   };
 
+  private onWindowFocus = () => {
+    updateOpenRealmSession(this.activeSessionId, { focusedAt: Date.now() });
+  };
+
   private addListeners() {
     ipcRenderer.addListener('export-schema', this.onExportSchemaIpc);
     window.addEventListener('beforeunload', this.onBeforeUnload);
+    window.addEventListener('focus', this.onWindowFocus);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('mouseup', this.onMouseUp);
   }
@@ -1678,6 +1715,7 @@ class RealmBrowserContainer
   private removeListeners() {
     ipcRenderer.removeListener('export-schema', this.onExportSchemaIpc);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
+    window.removeEventListener('focus', this.onWindowFocus);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('mouseup', this.onMouseUp);
   }

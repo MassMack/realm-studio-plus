@@ -22,6 +22,10 @@ import path from 'path';
 import Realm from 'realm';
 
 import { serializeRealmValue } from '../utils/realm-serialize';
+import { getAppUserDataCandidates } from '../utils/user-data-path';
+
+import { listActiveRealmSessions } from './active-realms';
+import { getCandidateKeysForPath } from './encryption-keys';
 
 export const MAX_MCP_QUERY_LIMIT = 50;
 const HEX_128_REGEX = /^[a-fA-F0-9]{128}$/;
@@ -42,8 +46,12 @@ export interface IClassOverviewSummary {
   rowCount: number | null;
 }
 
+export type RealmTargetSource = 'explicit-path' | 'open-window' | 'recent-file';
+
 export interface IRealmOverviewResult {
   path: string;
+  source: RealmTargetSource;
+  activeClassName: string | null;
   sizeBytes: number;
   schemaVersion: number;
   classes: IClassOverviewSummary[];
@@ -68,6 +76,7 @@ export interface IClassSchemaDetail {
 
 export interface IQueryRealmResult {
   path: string;
+  source: RealmTargetSource;
   className: string;
   query: string | null;
   totalInClass: number;
@@ -76,6 +85,52 @@ export interface IQueryRealmResult {
   limit: number;
   sensitiveFieldsMasked: boolean;
   rows: unknown[];
+}
+
+interface IResolvedTargetRealm {
+  path: string;
+  source: RealmTargetSource;
+  activeClassName?: string;
+  sessionKeyHex?: string;
+}
+
+export function resolveTargetRealm(rawPath?: string): IResolvedTargetRealm {
+  const openSessions = listActiveRealmSessions();
+
+  if (rawPath && rawPath.trim()) {
+    const resolved = resolveUserRealmPath(rawPath);
+    const matchingSession = openSessions.find((s) => s.path === resolved);
+    return {
+      path: resolved,
+      source: 'explicit-path',
+      activeClassName: matchingSession?.activeClassName,
+      sessionKeyHex: matchingSession?.encryptionKeyHex
+    };
+  }
+
+  for (const session of openSessions) {
+    if (fs.existsSync(session.path)) {
+      return {
+        path: session.path,
+        source: 'open-window',
+        activeClassName: session.activeClassName,
+        sessionKeyHex: session.encryptionKeyHex
+      };
+    }
+  }
+
+  for (const recent of listRecentRealmsHeadless()) {
+    if (recent.exists) {
+      return {
+        path: recent.path,
+        source: 'recent-file'
+      };
+    }
+  }
+
+  throw new Error(
+    'No Realm file specified, no Realm Studio Plus window is currently open, and no recent .realm file was found. Open a .realm file in Realm Studio Plus or pass "path".'
+  );
 }
 
 export function resolveUserRealmPath(rawPath: string): string {
@@ -90,7 +145,7 @@ export function resolveUserRealmPath(rawPath: string): string {
 }
 
 export function parseEncryptionKeyHex(rawHex?: string): Uint8Array | undefined {
-  const effective = (rawHex ?? process.env.REALM_ENCRYPTION_KEY ?? '').trim();
+  const effective = (rawHex ?? '').trim();
   if (!effective) {
     return undefined;
   }
@@ -104,22 +159,6 @@ export function parseEncryptionKeyHex(rawHex?: string): Uint8Array | undefined {
     bytes[i] = parseInt(effective.slice(i * 2, i * 2 + 2), 16);
   }
   return bytes;
-}
-
-function getAppUserDataCandidates(): string[] {
-  const home = os.homedir();
-  const names = ['Realm Studio Plus', 'realm-studio-plus'];
-  if (process.platform === 'darwin') {
-    return names.map((n) =>
-      path.join(home, 'Library/Application Support', n)
-    );
-  }
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(home, 'AppData/Roaming');
-    return names.map((n) => path.join(appData, n));
-  }
-  const configHome = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
-  return names.map((n) => path.join(configHome, n));
 }
 
 export function listRecentRealmsHeadless(): IRecentRealmSummary[] {
@@ -209,12 +248,70 @@ function openRealmReadOnlySync(
   }
 }
 
+function isDecryptionOrInvalidFormatError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return /decrypt|encryption|invalid realm|bad header|hmac|not a realm file/i.test(
+    err.message
+  );
+}
+
+function collectCandidateKeys(
+  resolvedPath: string,
+  explicitKeyHex?: string,
+  sessionKeyHex?: string
+): Array<Uint8Array | undefined> {
+  const seenHex = new Set<string>();
+  const keyBuffers: Uint8Array[] = [];
+
+  const pushHex = (hex?: string) => {
+    const parsed = parseEncryptionKeyHex(hex);
+    if (!parsed) {
+      return;
+    }
+    const normalized = hex!.trim().toLowerCase();
+    if (!seenHex.has(normalized)) {
+      seenHex.add(normalized);
+      keyBuffers.push(parsed);
+    }
+  };
+
+  pushHex(explicitKeyHex);
+  pushHex(process.env.REALM_ENCRYPTION_KEY);
+  pushHex(sessionKeyHex);
+  for (const vaultKey of getCandidateKeysForPath(resolvedPath)) {
+    try {
+      pushHex(vaultKey);
+    } catch {
+      // ignore invalid key entries in vault
+    }
+  }
+
+  // If explicit/env/session key was provided, try keys first; otherwise try unencrypted first then Vault keys
+  const hasExplicitOrSession =
+    !!explicitKeyHex?.trim() ||
+    !!process.env.REALM_ENCRYPTION_KEY?.trim() ||
+    !!sessionKeyHex?.trim();
+
+  if (hasExplicitOrSession) {
+    return [...keyBuffers, undefined];
+  }
+  return [undefined, ...keyBuffers];
+}
+
 export function withOpenedRealm<T>(
-  rawPath: string,
+  rawPath: string | undefined,
   encryptionKeyHex: string | undefined,
-  fn: (realm: Realm, resolvedPath: string, fileSizeBytes: number) => T
+  fn: (
+    realm: Realm,
+    target: IResolvedTargetRealm,
+    fileSizeBytes: number
+  ) => T
 ): T {
-  const resolvedPath = resolveUserRealmPath(rawPath);
+  const target = resolveTargetRealm(rawPath);
+  const resolvedPath = target.path;
+
   if (!fs.existsSync(resolvedPath)) {
     throw new Error(`Realm file not found: ${resolvedPath}`);
   }
@@ -223,10 +320,40 @@ export function withOpenedRealm<T>(
     throw new Error(`Path is not a file: ${resolvedPath}`);
   }
 
-  const encryptionKey = parseEncryptionKeyHex(encryptionKeyHex);
-  const realm = openRealmReadOnlySync(resolvedPath, encryptionKey);
+  const attempts = collectCandidateKeys(
+    resolvedPath,
+    encryptionKeyHex,
+    target.sessionKeyHex
+  );
+  let lastError: unknown;
+  let realm: Realm | null = null;
+
+  for (const keyBuf of attempts) {
+    try {
+      realm = openRealmReadOnlySync(resolvedPath, keyBuf);
+      break;
+    } catch (err) {
+      lastError = err;
+      if (!isDecryptionOrInvalidFormatError(err) && keyBuf === undefined) {
+        // Non-crypto failure (e.g. permissions / format upgrade / lock)
+        break;
+      }
+    }
+  }
+
+  if (!realm) {
+    if (isDecryptionOrInvalidFormatError(lastError)) {
+      throw new Error(
+        `Cannot decrypt Realm file (${path.basename(resolvedPath)}). Open/unlock it in Realm Studio Plus (or save its key in Key Vault), set REALM_ENCRYPTION_KEY in your MCP "env" config, or pass encryptionKeyHex.`
+      );
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(String(lastError));
+  }
+
   try {
-    return fn(realm, resolvedPath, stat.size);
+    return fn(realm, target, stat.size);
   } finally {
     if (!realm.isClosed) {
       realm.close();
@@ -235,13 +362,13 @@ export function withOpenedRealm<T>(
 }
 
 export function inspectRealmOverview(params: {
-  path: string;
+  path?: string;
   encryptionKeyHex?: string;
 }): IRealmOverviewResult {
   return withOpenedRealm(
     params.path,
     params.encryptionKeyHex,
-    (realm, resolvedPath, sizeBytes) => {
+    (realm, target, sizeBytes) => {
       const classes: IClassOverviewSummary[] = realm.schema
         .filter((s) => !s.name.startsWith('__'))
         .map((schema) => ({
@@ -257,7 +384,9 @@ export function inspectRealmOverview(params: {
         }));
 
       return {
-        path: resolvedPath,
+        path: target.path,
+        source: target.source,
+        activeClassName: target.activeClassName || null,
         sizeBytes,
         schemaVersion: realm.schemaVersion,
         classes
@@ -267,11 +396,16 @@ export function inspectRealmOverview(params: {
 }
 
 export function getRealmClassSchemas(params: {
-  path: string;
+  path?: string;
   className?: string;
   encryptionKeyHex?: string;
-}): IClassSchemaDetail[] {
-  return withOpenedRealm(params.path, params.encryptionKeyHex, (realm) => {
+}): {
+  path: string;
+  source: RealmTargetSource;
+  activeClassName: string | null;
+  classes: IClassSchemaDetail[];
+} {
+  return withOpenedRealm(params.path, params.encryptionKeyHex, (realm, target) => {
     const schemas = realm.schema.filter((s) => {
       if (s.name.startsWith('__')) {
         return false;
@@ -289,26 +423,31 @@ export function getRealmClassSchemas(params: {
       );
     }
 
-    return schemas.map((schema) => ({
-      name: schema.name,
-      embedded: !!schema.embedded,
-      asymmetric: !!schema.asymmetric,
-      primaryKey: schema.primaryKey || null,
-      properties: Object.entries(schema.properties).map(([propName, raw]) => {
-        const prop =
-          typeof raw === 'string'
-            ? ({ type: raw } as Realm.ObjectSchemaProperty)
-            : (raw as Realm.ObjectSchemaProperty);
-        return {
-          name: propName,
-          type: prop.type,
-          objectType: prop.objectType || null,
-          optional: !!prop.optional,
-          indexed: !!prop.indexed,
-          isPrimaryKey: schema.primaryKey === propName
-        };
-      })
-    }));
+    return {
+      path: target.path,
+      source: target.source,
+      activeClassName: target.activeClassName || null,
+      classes: schemas.map((schema) => ({
+        name: schema.name,
+        embedded: !!schema.embedded,
+        asymmetric: !!schema.asymmetric,
+        primaryKey: schema.primaryKey || null,
+        properties: Object.entries(schema.properties).map(([propName, raw]) => {
+          const prop =
+            typeof raw === 'string'
+              ? ({ type: raw } as Realm.ObjectSchemaProperty)
+              : (raw as Realm.ObjectSchemaProperty);
+          return {
+            name: propName,
+            type: prop.type,
+            objectType: prop.objectType || null,
+            optional: !!prop.optional,
+            indexed: !!prop.indexed,
+            isPrimaryKey: schema.primaryKey === propName
+          };
+        })
+      }))
+    };
   });
 }
 
@@ -349,9 +488,27 @@ function getFilteredCollection(
   return { totalInClass, collection: results };
 }
 
+function resolveEffectiveClassName(
+  realm: Realm,
+  requestedClassName: string | undefined,
+  activeClassName: string | undefined
+): string {
+  const candidate = requestedClassName?.trim() || activeClassName?.trim();
+  if (candidate) {
+    return candidate;
+  }
+  const firstStandard = realm.schema.find(
+    (s) => !s.name.startsWith('__') && !s.embedded && !s.asymmetric
+  );
+  if (firstStandard) {
+    return firstStandard.name;
+  }
+  throw new Error('No queryable Realm class found in this file.');
+}
+
 export function queryRealmObjects(params: {
-  path: string;
-  className: string;
+  path?: string;
+  className?: string;
   query?: string;
   sortBy?: string;
   descending?: boolean;
@@ -370,10 +527,15 @@ export function queryRealmObjects(params: {
   return withOpenedRealm(
     params.path,
     params.encryptionKeyHex,
-    (realm, resolvedPath) => {
-      const { totalInClass, collection } = getFilteredCollection(
+    (realm, target) => {
+      const effectiveClassName = resolveEffectiveClassName(
         realm,
         params.className,
+        target.activeClassName
+      );
+      const { totalInClass, collection } = getFilteredCollection(
+        realm,
+        effectiveClassName,
         params.query,
         params.sortBy,
         !!params.descending
@@ -392,8 +554,9 @@ export function queryRealmObjects(params: {
       }
 
       return {
-        path: resolvedPath,
-        className: params.className,
+        path: target.path,
+        source: target.source,
+        className: effectiveClassName,
         query: params.query?.trim() || null,
         totalInClass,
         totalMatched,
@@ -407,23 +570,35 @@ export function queryRealmObjects(params: {
 }
 
 export function countRealmObjects(params: {
-  path: string;
-  className: string;
+  path?: string;
+  className?: string;
   query?: string;
   encryptionKeyHex?: string;
-}): { path: string; className: string; query: string | null; count: number } {
+}): {
+  path: string;
+  source: RealmTargetSource;
+  className: string;
+  query: string | null;
+  count: number;
+} {
   return withOpenedRealm(
     params.path,
     params.encryptionKeyHex,
-    (realm, resolvedPath) => {
-      const { collection } = getFilteredCollection(
+    (realm, target) => {
+      const effectiveClassName = resolveEffectiveClassName(
         realm,
         params.className,
+        target.activeClassName
+      );
+      const { collection } = getFilteredCollection(
+        realm,
+        effectiveClassName,
         params.query
       );
       return {
-        path: resolvedPath,
-        className: params.className,
+        path: target.path,
+        source: target.source,
+        className: effectiveClassName,
         query: params.query?.trim() || null,
         count: collection.length
       };

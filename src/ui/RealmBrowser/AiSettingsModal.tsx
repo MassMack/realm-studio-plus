@@ -36,12 +36,17 @@ import {
 } from 'reactstrap';
 
 import {
+  listActiveRealmsPublic,
+  listActiveRealmSessions
+} from '../../services/active-realms';
+import {
   getAiApiKey,
   isApiKeyEncryptionAvailable,
   listOllamaModels,
   setAiApiKey,
   testAiConnection
 } from '../../services/ai';
+import { getCandidateKeysForPath } from '../../services/encryption-keys';
 import {
   AI_PROVIDER_LABELS,
   AI_PROVIDERS,
@@ -64,7 +69,9 @@ const MODEL_SUGGESTIONS: Readonly<Record<AiProvider, string[]>> = {
   anthropic: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-latest']
 };
 
-function buildMcpConfigSnippet(): string {
+type McpClientFormat = 'vscode' | 'mcpServers';
+
+function resolveMcpRuntimePaths(): { nodeCommand: string; bundlePath: string } {
   let bundlePath = 'build/mcp.bundle.js';
   try {
     bundlePath = path.join(remote.app.getAppPath(), 'build', 'mcp.bundle.js');
@@ -84,13 +91,59 @@ function buildMcpConfigSnippet(): string {
   } catch {
     // fallback to 'node' on PATH
   }
+  return { nodeCommand, bundlePath };
+}
+
+function getPreferredEncryptionKeyHex(): string {
+  const active = listActiveRealmSessions();
+  for (const s of active) {
+    if (s.encryptionKeyHex) {
+      return s.encryptionKeyHex;
+    }
+    const candidates = getCandidateKeysForPath(s.path);
+    if (candidates.length > 0) {
+      return candidates[0];
+    }
+  }
+  const fallback = getCandidateKeysForPath('');
+  return fallback[0] || '';
+}
+
+function buildMcpConfigSnippet(
+  format: McpClientFormat,
+  includeSavedKey: boolean
+): string {
+  const { nodeCommand, bundlePath } = resolveMcpRuntimePaths();
+  const keyHex = includeSavedKey ? getPreferredEncryptionKeyHex() : '';
+
+  if (format === 'vscode') {
+    return JSON.stringify(
+      {
+        servers: {
+          'realm-studio-plus': {
+            type: 'stdio',
+            command: nodeCommand,
+            args: [bundlePath],
+            env: {
+              REALM_ENCRYPTION_KEY: keyHex
+            }
+          }
+        }
+      },
+      null,
+      2
+    );
+  }
 
   return JSON.stringify(
     {
       mcpServers: {
         'realm-studio-plus': {
           command: nodeCommand,
-          args: [bundlePath]
+          args: [bundlePath],
+          env: {
+            REALM_ENCRYPTION_KEY: keyHex
+          }
         }
       }
     },
@@ -105,6 +158,11 @@ export const AiSettingsModal = ({
   onSaved
 }: IAiSettingsModalProps) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'mcp'>('ai');
+  const [mcpFormat, setMcpFormat] = useState<McpClientFormat>('vscode');
+  const [includeSavedKeyInEnv, setIncludeSavedKeyInEnv] = useState(false);
+  const [openRealmsCount, setOpenRealmsCount] = useState(0);
+  const [activeRealmName, setActiveRealmName] = useState<string | null>(null);
+  const [hasAutoUnlockKey, setHasAutoUnlockKey] = useState(false);
   const [form, setForm] = useState<IAiSettings>(() => settings.getAiSettings());
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -112,7 +170,6 @@ export const AiSettingsModal = ({
   const [isScanningOllama, setIsScanningOllama] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [copiedMcp, setCopiedMcp] = useState(false);
-  const [mcpConfigJson, setMcpConfigJson] = useState('');
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     message: string;
@@ -126,8 +183,15 @@ export const AiSettingsModal = ({
     setTestResult(null);
     setOllamaModels([]);
     setCopiedMcp(false);
-    setMcpConfigJson(buildMcpConfigSnippet());
+    const active = listActiveRealmsPublic();
+    setOpenRealmsCount(active.length);
+    setActiveRealmName(
+      active[0] ? path.basename(active[0].path) : null
+    );
+    setHasAutoUnlockKey(getPreferredEncryptionKeyHex().length > 0);
   };
+
+  const mcpConfigJson = buildMcpConfigSnippet(mcpFormat, includeSavedKeyInEnv);
 
   const handleProviderChange = (provider: AiProvider) => {
     const isUsingDefaultModel = Object.values(DEFAULT_AI_MODELS).includes(
@@ -376,52 +440,90 @@ export const AiSettingsModal = ({
         ) : (
           <div>
             <Alert color="info" className="py-2 px-3 small mb-3">
-              <i className="fa fa-lock" aria-hidden="true" />{' '}
-              <strong>Read-Only MCP Server (stdio):</strong> Allows Antigravity,
-              VS Code Copilot, Cursor, or Claude Desktop to inspect schemas,
-              scan iOS Simulators, and query Realm objects (sensitive fields
-              masked, max 50 rows/call).
+              <i className="fa fa-link" aria-hidden="true" />{' '}
+              <strong>Auto-Linked to Open Windows &amp; Key Vault:</strong>{' '}
+              {openRealmsCount > 0 ? (
+                <>
+                  Active window: <code>{activeRealmName}</code>
+                  {openRealmsCount > 1 ? ` (+${openRealmsCount - 1} more)` : ''}.
+                </>
+              ) : (
+                'Omit path to use the most recently opened Realm.'
+              )}{' '}
+              {hasAutoUnlockKey ? (
+                <span>Unlocked/Vault keys are reused locally without putting them in chat.</span>
+              ) : (
+                <span>
+                  For encrypted Realms, unlock them here or paste the 128-hex key into{' '}
+                  <code>REALM_ENCRYPTION_KEY</code>.
+                </span>
+              )}
             </Alert>
 
-            <FormGroup>
-              <div className="d-flex justify-content-between align-items-center mb-1">
-                <Label className="mb-0">MCP Client Config (JSON)</Label>
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <ButtonGroup size="sm">
                 <Button
-                  size="sm"
-                  color="primary"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(mcpConfigJson);
-                    setCopiedMcp(true);
-                    setTimeout(() => setCopiedMcp(false), 1500);
-                  }}
+                  color={mcpFormat === 'vscode' ? 'primary' : 'secondary'}
+                  onClick={() => setMcpFormat('vscode')}
                 >
-                  <i
-                    className={`fa ${copiedMcp ? 'fa-check' : 'fa-copy'}`}
-                    aria-hidden="true"
-                  />{' '}
-                  {copiedMcp ? 'Copied!' : 'Copy Config'}
+                  VS Code (.vscode/mcp.json)
                 </Button>
-              </div>
-              <pre
-                style={{
-                  fontSize: '12px',
-                  maxHeight: '180px',
-                  overflow: 'auto',
-                  marginBottom: '12px'
+                <Button
+                  color={mcpFormat === 'mcpServers' ? 'primary' : 'secondary'}
+                  onClick={() => setMcpFormat('mcpServers')}
+                >
+                  Cursor / Claude / Antigravity
+                </Button>
+              </ButtonGroup>
+
+              <Button
+                size="sm"
+                color="primary"
+                onClick={() => {
+                  void navigator.clipboard.writeText(mcpConfigJson);
+                  setCopiedMcp(true);
+                  setTimeout(() => setCopiedMcp(false), 1500);
                 }}
               >
-                {mcpConfigJson}
-              </pre>
+                <i
+                  className={`fa ${copiedMcp ? 'fa-check' : 'fa-copy'}`}
+                  aria-hidden="true"
+                />{' '}
+                {copiedMcp ? 'Copied!' : 'Copy Config'}
+              </Button>
+            </div>
+
+            <FormGroup check className="mb-2">
+              <Label check className="small">
+                <Input
+                  type="checkbox"
+                  checked={includeSavedKeyInEnv}
+                  onChange={(e) => setIncludeSavedKeyInEnv(e.target.checked)}
+                />{' '}
+                Pre-fill active / Vault key into <code>env.REALM_ENCRYPTION_KEY</code>{' '}
+                (leave unchecked if committing <code>.vscode/mcp.json</code> to Git)
+              </Label>
             </FormGroup>
 
+            <pre
+              style={{
+                fontSize: '12px',
+                maxHeight: '185px',
+                overflow: 'auto',
+                marginBottom: '10px'
+              }}
+            >
+              {mcpConfigJson}
+            </pre>
+
             <div className="small text-muted">
-              <strong>Available Tools (7):</strong>{' '}
-              <code>list_simulator_realms</code>,{' '}
-              <code>list_android_realms</code>,{' '}
-              <code>list_recent_realms</code>,{' '}
+              <strong>Available Tools (8, Read-Only):</strong>{' '}
+              <code>get_open_realms</code>,{' '}
               <code>inspect_realm_overview</code>,{' '}
               <code>get_class_schema</code>, <code>query_realm</code>,{' '}
-              <code>count_realm_objects</code>.
+              <code>count_realm_objects</code>,{' '}
+              <code>list_simulator_realms</code>,{' '}
+              <code>list_android_realms</code>, <code>list_recent_realms</code>.
             </div>
           </div>
         )}

@@ -19,6 +19,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
+import { listActiveRealmsPublic } from '../services/active-realms';
 import {
   findAndroidRealmFiles,
   resolveAdbBinary
@@ -160,6 +161,21 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
   );
 
   server.registerTool(
+    'get_open_realms',
+    {
+      title: 'Get Currently Open Realms in Realm Studio Plus',
+      description:
+        'Return the .realm file(s) currently open in Realm Studio Plus (most recently focused window and active class first), plus recent files as fallback.',
+      inputSchema: {},
+      annotations: READ_ONLY_ANNOTATIONS
+    },
+    wrapReadOnly(() => ({
+      openWindows: listActiveRealmsPublic(),
+      recentFiles: listRecentRealmsHeadless()
+    }))
+  );
+
+  server.registerTool(
     'list_recent_realms',
     {
       title: 'List Recently Opened Realms',
@@ -178,14 +194,20 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     {
       title: 'Inspect Realm Overview',
       description:
-        'Open a .realm file in strict read-only mode and return schemaVersion, file size, classes, primary keys, and row counts.',
+        'Open a .realm file in strict read-only mode and return schemaVersion, file size, classes, primary keys, and row counts. Automatically uses the currently open Realm Studio Plus window and saved Vault/session key if path/key are omitted.',
       inputSchema: {
-        path: z.string().min(1).describe('Absolute or ~/ path to the .realm file.'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Plus.'
+          ),
         encryptionKeyHex: z
           .string()
           .optional()
           .describe(
-            'Optional 128-character hex encryption key (or set REALM_ENCRYPTION_KEY env var).'
+            'Optional 128-character hex encryption key (auto-uses unlocked session/Key Vault or REALM_ENCRYPTION_KEY env if omitted).'
           )
       },
       annotations: READ_ONLY_ANNOTATIONS
@@ -200,9 +222,15 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     {
       title: 'Get Realm Class Schema',
       description:
-        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) for one class or all classes in a .realm file.',
+        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) for one class or all classes. Defaults to the currently open Realm in Realm Studio Plus when path is omitted.',
       inputSchema: {
-        path: z.string().min(1).describe('Absolute or ~/ path to the .realm file.'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Plus.'
+          ),
         className: z
           .string()
           .optional()
@@ -214,19 +242,31 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS
     },
-    wrapReadOnly(({ path, className, encryptionKeyHex }) => ({
-      classes: getRealmClassSchemas({ path, className, encryptionKeyHex })
-    }))
+    wrapReadOnly(({ path, className, encryptionKeyHex }) =>
+      getRealmClassSchemas({ path, className, encryptionKeyHex })
+    )
   );
 
   server.registerTool(
     'query_realm',
     {
       title: 'Query Realm Objects (RQL)',
-      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields like token/password/secret are masked by default).`,
+      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields masked by default). Omit path/className to query the currently open window & table in Realm Studio Plus.`,
       inputSchema: {
-        path: z.string().min(1).describe('Absolute or ~/ path to the .realm file.'),
-        className: z.string().min(1).describe('Name of the Realm class to query.'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Plus.'
+          ),
+        className: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Realm class name to query. Omit to use the currently active table in Realm Studio Plus.'
+          ),
         query: z
           .string()
           .optional()
@@ -275,10 +315,22 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     {
       title: 'Count Realm Objects',
       description:
-        'Count objects in a Realm class matching an optional RQL query without returning row payloads.',
+        'Count objects in a Realm class matching an optional RQL query without returning row payloads. Omit path/className to count in the currently open Realm & class.',
       inputSchema: {
-        path: z.string().min(1).describe('Absolute or ~/ path to the .realm file.'),
-        className: z.string().min(1).describe('Name of the Realm class to count.'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Plus.'
+          ),
+        className: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Realm class name to count. Omit to use the currently active table in Realm Studio Plus.'
+          ),
         query: z.string().optional().describe('Optional RQL filter predicate.'),
         encryptionKeyHex: z
           .string()
