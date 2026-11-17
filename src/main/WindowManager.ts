@@ -29,6 +29,7 @@ import {
   IWindowConstructorOptions
 } from '../windows/Window';
 import { WindowOptions, WindowType } from '../windows/WindowOptions';
+import { resolveAppIconPath } from './app-icon';
 import { getWindowBackgroundColor } from './theme';
 
 export interface IEventListenerCallbacks {
@@ -103,9 +104,11 @@ export class WindowManager {
       savedWindowOptions.height || 0
     );
     // Combine these with general default options
+    const appIconPath = resolveAppIconPath();
     const combinedWindowOptions: IWindowConstructorOptions = {
       // Starting with the default options
       title: app.name,
+      ...(appIconPath ? { icon: appIconPath } : {}),
       width: 800,
       height: 600,
       // vibrancy: 'light',

@@ -28,6 +28,7 @@ import { showError } from '../ui/reusable/errors';
 import { IRealmBrowserWindowProps } from '../windows/WindowProps';
 
 import { removeRendererDirectories } from '../utils';
+import { applyCustomAppIcon } from './app-icon';
 import { CertificateManager } from './CertificateManager';
 import { MainActions } from './MainActions';
 import { getDefaultMenuTemplate } from './MainMenu';
@@ -267,6 +268,7 @@ export class Application {
   }
 
   private onReady = () => {
+    applyCustomAppIcon();
     // Before the first window is created, so it gets the right background
     // colour and its renderer starts out in the right appearance
     applyThemeMode();
