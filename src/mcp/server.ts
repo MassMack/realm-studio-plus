@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { listActiveRealmsPublic } from '../services/active-realms';
 import {
   findAndroidRealmFiles,
+  pullMatchingAndroidRealm,
   resolveAdbBinary
 } from '../services/android-finder';
 import {
@@ -156,6 +157,62 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
           ...f,
           modifiedAt: f.mtimeMs ? new Date(f.mtimeMs).toISOString() : ''
         }))
+      };
+    })
+  );
+
+  server.registerTool(
+    'pull_android_realm',
+    {
+      title: 'Pull Realm File from Android Device / Emulator',
+      description:
+        'Pull a .realm file from a connected Android phone or Emulator via ADB to a local temp path so inspect_realm_overview and query_realm can read it. When arguments are omitted, automatically pulls the actively debugged or latest .realm file. Reuses the local copy if remote size & mtime are unchanged unless forceRefresh is true.',
+      inputSchema: {
+        serial: z
+          .string()
+          .optional()
+          .describe('Optional ADB device/emulator serial.'),
+        pkg: z
+          .string()
+          .optional()
+          .describe('Optional Android package name (e.g. com.example.app).'),
+        remoteRelPath: z
+          .string()
+          .optional()
+          .describe(
+            'Optional relative path or filename inside app sandbox (e.g. files/db/realm/default.realm).'
+          ),
+        forceRefresh: z
+          .boolean()
+          .optional()
+          .describe(
+            'Set true to force re-pulling even if local cached size and mtime match (default false).'
+          )
+      },
+      annotations: READ_ONLY_ANNOTATIONS
+    },
+    wrapReadOnly(async ({ serial, pkg, remoteRelPath, forceRefresh }) => {
+      const result = await pullMatchingAndroidRealm({
+        serial,
+        pkg,
+        remoteRelPath,
+        forceRefresh
+      });
+      return {
+        path: result.path,
+        reusedCache: result.reusedCache,
+        durationMs: result.durationMs,
+        deviceName: result.file.deviceName,
+        serial: result.file.serial,
+        isEmulator: result.file.isEmulator,
+        pkg: result.file.pkg,
+        remoteRelPath: result.file.remoteRelPath,
+        isActiveInProcess: result.file.isActiveInProcess,
+        isLatest: result.file.isLatest,
+        sizeBytes: result.file.sizeBytes,
+        modifiedAt: result.file.mtimeMs
+          ? new Date(result.file.mtimeMs).toISOString()
+          : ''
       };
     })
   );

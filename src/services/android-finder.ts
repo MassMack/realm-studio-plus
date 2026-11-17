@@ -315,6 +315,7 @@ export function pullAndroidRealmFile(params: {
 
   const destFile = path.join(targetDir, path.basename(item.remoteRelPath));
   const tempFile = `${destFile}.part`;
+  const metaFile = `${destFile}.meta.json`;
 
   const adbArgs =
     item.accessMode === 'root'
@@ -398,6 +399,15 @@ export function pullAndroidRealmFile(params: {
         }
         try {
           fs.moveSync(tempFile, destFile, { overwrite: true });
+          try {
+            fs.writeJsonSync(metaFile, {
+              sizeBytes: item.sizeBytes,
+              mtimeMs: item.mtimeMs,
+              pulledAt: Date.now()
+            });
+          } catch {
+            // ignore metadata cache write failure
+          }
           settled = true;
           if (onProgress) {
             onProgress(bytesWritten, item.sizeBytes || bytesWritten);
@@ -413,4 +423,101 @@ export function pullAndroidRealmFile(params: {
 
     outStream.on('error', (err) => fail(err));
   });
+}
+
+export async function pullMatchingAndroidRealm(params: {
+  serial?: string;
+  pkg?: string;
+  remoteRelPath?: string;
+  forceRefresh?: boolean;
+  destDir?: string;
+}): Promise<{
+  path: string;
+  reusedCache: boolean;
+  durationMs: number;
+  file: IAndroidRealmFile;
+}> {
+  const adbBin = resolveAdbBinary();
+  if (!adbBin) {
+    throw new Error('Android Platform-Tools (adb) not found on this machine.');
+  }
+
+  const { devices, files } = await findAndroidRealmFiles(adbBin);
+  const readyDevices = devices.filter((d) => d.state === 'device');
+  if (readyDevices.length === 0) {
+    if (devices.length > 0) {
+      const states = devices.map((d) => `${d.model}: ${d.state}`).join(', ');
+      throw new Error(`No ready ADB device (${states}).`);
+    }
+    throw new Error('No running Android Emulator or connected ADB device found.');
+  }
+
+  const matches = files.filter((f) => {
+    if (params.serial && f.serial !== params.serial) {
+      return false;
+    }
+    if (params.pkg && f.pkg !== params.pkg) {
+      return false;
+    }
+    if (
+      params.remoteRelPath &&
+      f.remoteRelPath !== params.remoteRelPath &&
+      path.basename(f.remoteRelPath) !== params.remoteRelPath
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  if (matches.length === 0) {
+    throw new Error(
+      'No matching debuggable .realm file found on connected Android device(s).'
+    );
+  }
+
+  const target = matches[0];
+  const destDir = params.destDir || path.join(os.tmpdir(), 'realm-studio-android');
+  const expectedDest = path.join(
+    destDir,
+    target.serial,
+    target.pkg,
+    path.basename(target.remoteRelPath)
+  );
+  const metaFile = `${expectedDest}.meta.json`;
+
+  if (!params.forceRefresh && fs.existsSync(expectedDest) && fs.existsSync(metaFile)) {
+    try {
+      const meta = fs.readJsonSync(metaFile) as {
+        sizeBytes?: number;
+        mtimeMs?: number;
+      };
+      if (
+        target.sizeBytes > 0 &&
+        meta.sizeBytes === target.sizeBytes &&
+        meta.mtimeMs === target.mtimeMs
+      ) {
+        return {
+          path: expectedDest,
+          reusedCache: true,
+          durationMs: 0,
+          file: target
+        };
+      }
+    } catch {
+      // ignore stale cache metadata
+    }
+  }
+
+  const t0 = Date.now();
+  const pulledPath = await pullAndroidRealmFile({
+    adbBin,
+    item: target,
+    destDir
+  });
+  return {
+    path: pulledPath,
+    reusedCache: false,
+    durationMs: Date.now() - t0,
+    file: target
+  };
 }
