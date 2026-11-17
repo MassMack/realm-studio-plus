@@ -166,7 +166,7 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     {
       title: 'Pull Realm File from Android Device / Emulator',
       description:
-        'Pull a .realm file from a connected Android phone or Emulator via ADB to a local temp path so inspect_realm_overview and query_realm can read it. When arguments are omitted, automatically pulls the actively debugged or latest .realm file. Reuses the local copy if remote size & mtime are unchanged unless forceRefresh is true.',
+        'Force-pull the latest .realm file from a connected Android phone or Emulator via ADB to a local temp path so inspect_realm_overview and query_realm read live data. Defaults to forceRefresh=true and automatically selects the actively debugged or latest .realm file.',
       inputSchema: {
         serial: z
           .string()
@@ -186,7 +186,7 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
           .boolean()
           .optional()
           .describe(
-            'Set true to force re-pulling even if local cached size and mtime match (default false).'
+            'Always pulls fresh by default (true). Set false only if you want to reuse a cached local pull when remote size/mtime match.'
           )
       },
       annotations: READ_ONLY_ANNOTATIONS

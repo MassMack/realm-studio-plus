@@ -401,6 +401,14 @@ export function pullAndroidRealmFile(params: {
           fs.moveSync(tempFile, destFile, { overwrite: true });
           try {
             fs.writeJsonSync(metaFile, {
+              source: 'android-adb',
+              serial: item.serial,
+              deviceName: item.deviceName,
+              isEmulator: item.isEmulator,
+              pkg: item.pkg,
+              remoteRelPath: item.remoteRelPath,
+              accessMode: item.accessMode,
+              destDir,
               sizeBytes: item.sizeBytes,
               mtimeMs: item.mtimeMs,
               pulledAt: Date.now()
@@ -485,7 +493,10 @@ export async function pullMatchingAndroidRealm(params: {
   );
   const metaFile = `${expectedDest}.meta.json`;
 
-  if (!params.forceRefresh && fs.existsSync(expectedDest) && fs.existsSync(metaFile)) {
+  // Always pull fresh from Android while debugging unless caller opts into cache (`forceRefresh: false`)
+  const forceRefresh = params.forceRefresh ?? true;
+
+  if (!forceRefresh && fs.existsSync(expectedDest) && fs.existsSync(metaFile)) {
     try {
       const meta = fs.readJsonSync(metaFile) as {
         sizeBytes?: number;
@@ -520,4 +531,76 @@ export async function pullMatchingAndroidRealm(params: {
     durationMs: Date.now() - t0,
     file: target
   };
+}
+
+interface IAndroidPullMetadata {
+  source?: string;
+  serial?: string;
+  deviceName?: string;
+  isEmulator?: boolean;
+  pkg?: string;
+  remoteRelPath?: string;
+  accessMode?: 'run-as' | 'root';
+  destDir?: string;
+  sizeBytes?: number;
+  mtimeMs?: number;
+}
+
+export async function refreshLocalAndroidRealmIfTracked(
+  localRealmPath: string
+): Promise<boolean> {
+  const metaFile = `${localRealmPath}.meta.json`;
+  if (!fs.existsSync(metaFile)) {
+    return false;
+  }
+  let meta: IAndroidPullMetadata;
+  try {
+    meta = fs.readJsonSync(metaFile) as IAndroidPullMetadata;
+  } catch {
+    return false;
+  }
+  if (
+    meta.source !== 'android-adb' ||
+    !meta.serial ||
+    !meta.pkg ||
+    !meta.remoteRelPath
+  ) {
+    return false;
+  }
+
+  const adbBin = resolveAdbBinary();
+  if (!adbBin) {
+    return false;
+  }
+  const devices = await listAdbDevices(adbBin).catch(() => []);
+  const ready = devices.find(
+    (d) => d.serial === meta.serial && d.state === 'device'
+  );
+  if (!ready) {
+    throw new Error(
+      `Android device "${meta.deviceName || meta.serial}" is not connected via ADB. Reconnect USB/Emulator to pull the latest data.`
+    );
+  }
+
+  const fallbackDestDir = path.dirname(
+    path.dirname(path.dirname(localRealmPath))
+  );
+  await pullAndroidRealmFile({
+    adbBin,
+    destDir: meta.destDir || fallbackDestDir,
+    item: {
+      serial: meta.serial,
+      deviceName: ready.model || meta.deviceName || meta.serial,
+      isEmulator: ready.isEmulator,
+      pkg: meta.pkg,
+      remoteRelPath: meta.remoteRelPath,
+      accessMode: meta.accessMode === 'root' ? 'root' : 'run-as',
+      sizeBytes: meta.sizeBytes || 0,
+      mtimeMs: Date.now(),
+      isAppRunning: true,
+      isActiveInProcess: true,
+      isLatest: true
+    }
+  });
+  return true;
 }

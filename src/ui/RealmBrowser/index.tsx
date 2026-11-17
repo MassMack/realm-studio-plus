@@ -28,6 +28,7 @@ import {
   unregisterOpenRealmSession,
   updateOpenRealmSession
 } from '../../services/active-realms';
+import { refreshLocalAndroidRealmIfTracked } from '../../services/android-finder';
 import { DataExporter, DataExportFormat } from '../../services/data-exporter';
 import * as dataImporter from '../../services/data-importer';
 import {
@@ -190,6 +191,7 @@ class RealmBrowserContainer
   private watcherDisabled = false;
   private isReloading = false;
   private readonly activeSessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  private pendingFocusClassName?: string;
   private untriedCandidateKeys: string[] | null = null;
   private pendingEncryptionSave?: {
     key: string;
@@ -564,6 +566,14 @@ class RealmBrowserContainer
     const firstSchemaName = this.realm.schema.find(
       (c) => c.name.indexOf('__') !== 0 && !c.embedded
     )?.name;
+    const targetClassName =
+      this.pendingFocusClassName &&
+      this.realm.schema.some(
+        (c) => c.name === this.pendingFocusClassName && !c.embedded
+      )
+        ? this.pendingFocusClassName
+        : firstSchemaName;
+    this.pendingFocusClassName = undefined;
 
     const rawKey = this.props.realm.encryptionKey;
     let sessionKeyHex: string | undefined;
@@ -578,13 +588,13 @@ class RealmBrowserContainer
     registerOpenRealmSession({
       id: this.activeSessionId,
       path: this.realm.path,
-      activeClassName: firstSchemaName,
+      activeClassName: targetClassName,
       schemaVersion: this.realm.schemaVersion,
       encryptionKeyHex: sessionKeyHex
     });
 
-    if (firstSchemaName) {
-      this.onClassFocussed(firstSchemaName);
+    if (targetClassName) {
+      this.onClassFocussed(targetClassName);
     }
     // Start importing data if needed
     if (this.props.import && this.realm) {
@@ -1345,15 +1355,20 @@ class RealmBrowserContainer
     // it was previously disabled by the rate limiter.
     this.reloadAttemptTimestamps = [];
     this.watcherDisabled = false;
-    void this.reloadFromDisk();
+    void this.reloadFromDisk({ rePullAndroid: true });
   };
 
-  private reloadFromDisk = async () => {
+  private reloadFromDisk = async (options?: { rePullAndroid?: boolean }) => {
     if (this.isReloading) {
       return;
     }
     this.isReloading = true;
     this.stopWatchingRealmFile();
+
+    // Preserve currently viewed class across reloads (handy during live debugging)
+    this.pendingFocusClassName = this.state.focus
+      ? getClassName(this.state.focus)
+      : undefined;
 
     // Keep a reference to the realm we are about to discard. We must NOT call
     // realm.close() until React has fully committed a render in which no
@@ -1412,6 +1427,13 @@ class RealmBrowserContainer
     }
 
     try {
+      if (options?.rePullAndroid && this.props.realm?.path) {
+        try {
+          await refreshLocalAndroidRealmIfTracked(this.props.realm.path);
+        } catch (adbErr) {
+          showError('Failed pulling fresh Android Realm via ADB', adbErr);
+        }
+      }
       await this.loadRealm(
         this.props.realm,
         this.props.import ? this.props.import.schema : undefined
