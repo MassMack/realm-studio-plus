@@ -256,7 +256,7 @@
       font-size: .76rem;
       line-height: 1.35;
       margin-top: .15rem;
-      word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     &__Actions {
