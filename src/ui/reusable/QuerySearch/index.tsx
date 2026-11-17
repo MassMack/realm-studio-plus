@@ -49,6 +49,7 @@ function saveStringArray(key: string, items: string[]) {
 }
 
 export interface IQuerySearchContainerProps {
+  enableGlobalFindShortcut?: boolean;
   onQueryChange: (query: string) => void;
   onQueryHelp?: () => void;
   queryHelpTooltip?: React.JSX.Element;
@@ -253,6 +254,9 @@ class QuerySearchContainer extends React.Component<
   };
 
   private onWindowKeyDown = (e: KeyboardEvent) => {
+    if (this.props.enableGlobalFindShortcut === false) {
+      return;
+    }
     const isFindShortcut =
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&

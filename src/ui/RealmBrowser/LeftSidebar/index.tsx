@@ -62,10 +62,12 @@ interface ILeftSidebarContainerProps {
   isOpen: boolean;
   onClassFocussed: ClassFocussedHandler;
   onDeleteClass?: (className: string) => void;
+  onOpenInSplitView?: (className: string) => void;
   onReload: () => void;
   onToggle: () => void;
   progress: ILoadingProgress;
   readOnly?: boolean;
+  secondaryClassNames?: string[];
   toggleAddClass: () => void;
   toggleGlobalSearch?: () => void;
   toggleOverview?: () => void;
@@ -123,6 +125,7 @@ class LeftSidebarContainer extends React.Component<
         isOpen={this.props.isOpen}
         onClassFocussed={this.props.onClassFocussed}
         onDeleteClass={this.props.onDeleteClass}
+        onOpenInSplitView={this.props.onOpenInSplitView}
         onReload={this.props.onReload}
         onSearchQueryChange={this.onSearchQueryChange}
         onToggle={this.props.onToggle}
@@ -132,6 +135,7 @@ class LeftSidebarContainer extends React.Component<
         readOnly={this.props.readOnly || false}
         searchInputRef={this.setSearchInputRef}
         searchQuery={this.state.searchQuery}
+        secondaryClassNames={this.props.secondaryClassNames}
         toggleAddClass={this.props.toggleAddClass}
         toggleGlobalSearch={this.props.toggleGlobalSearch}
         toggleOverview={this.props.toggleOverview}

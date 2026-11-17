@@ -27,6 +27,7 @@ import { QueryChangeHandler } from '.';
 
 interface ITopBarProps {
   allProperties?: IPropertyWithName[];
+  enableGlobalFindShortcut?: boolean;
   filteredCount?: number;
   focus: Focus;
   hiddenColumns?: string[];
@@ -55,6 +56,7 @@ const aiShortcutHint = isMac ? '⌘⇧A' : 'Ctrl+Shift+A';
 
 export const TopBar = ({
   allProperties,
+  enableGlobalFindShortcut = true,
   filteredCount,
   focus,
   hiddenColumns = [],
@@ -205,6 +207,7 @@ export const TopBar = ({
     <div className="RealmBrowser__Topbar">
       <QuerySearch
         className="RealmBrowser__Topbar__Filter"
+        enableGlobalFindShortcut={enableGlobalFindShortcut}
         onQueryChange={onQueryChange}
         onQueryHelp={onQueryHelp}
         query={query}

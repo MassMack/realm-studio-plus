@@ -16,14 +16,17 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
-import { ILoadingProgress, LoadingOverlay } from '../reusable/LoadingOverlay';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
 import { ImportableFile, ImportFormat } from '../../services/data-importer';
+import { ILoadingProgress, LoadingOverlay } from '../reusable/LoadingOverlay';
 
 import {
   ClassFocussedHandler,
-  ListFocussedHandler,
+  IPaneContentCallbacks,
+  IPaneViewState,
   IsEmbeddedTypeChecker,
-  SingleListFocussedHandler,
+  ISplitPaneUiCallbacks,
   JsonViewerDialogExecutor
 } from '.';
 import { AddClassModal } from './AddClassModal';
@@ -35,23 +38,31 @@ import {
   ICommandPaletteAction
 } from './CommandPaletteModal';
 import { Content, EditMode, HighlightMode } from './Content';
-import { IHighlight } from './Content/Table';
 import { DatabaseOverviewModal } from './DatabaseOverviewModal';
 import { IObjectIdentifier } from './display';
+import { EmbeddedFocusPlaceholder } from './EmbeddedFocusPlaceholder';
 import { EncryptionDialog } from './EncryptionDialog';
-import { Focus, IClassFocus } from './focus';
+import { generateKey, getClassName, IClassFocus } from './focus';
 import { GlobalSearchModal } from './GlobalSearchModal';
+import { ImportDialog } from './ImportDialog';
+import { JsonViewerDialog } from './JsonViewerDialog';
 import { LeftSidebar } from './LeftSidebar';
 import { IBreadcrumbItem, NavigationBar } from './NavigationBar';
 import { NoFocusPlaceholder } from './NoFocusPlaceholder';
-import { EmbeddedFocusPlaceholder } from './EmbeddedFocusPlaceholder';
-import { ImportDialog } from './ImportDialog';
-import { JsonViewerDialog } from './JsonViewerDialog';
+import {
+  listLeafIds,
+  SplitDirection,
+  SplitDropZone,
+  SplitLayoutNode
+} from './split-layout';
+import { ISplitPaneCallbacks, SplitNodeRenderer } from './SplitPaneContainer';
 
 import './RealmBrowser.scss';
 
 export interface IRealmBrowserProps {
   activeObjectId: IObjectIdentifier | null;
+  activePaneId: string;
+  aiSettingsInitialTab: AiSettingsModalTab;
   androidAutoSyncSec: number;
   androidSyncStatus: string | null;
   breadcrumbs: IBreadcrumbItem[];
@@ -59,25 +70,22 @@ export interface IRealmBrowserProps {
   canGoForward: boolean;
   classes: Realm.ObjectSchema[];
   commandPaletteActions: ICommandPaletteAction[];
-  contentKey: string;
-  contentRef: (instance: Content | null) => void;
-  createObjectSchema?: Realm.ObjectSchema;
   dataVersion: number;
   dataVersionAtBeginning?: number;
-  allowCreate: boolean;
   editMode: EditMode;
-  focus: Focus | null;
   getClassFocus: (className: string) => IClassFocus;
+  getPaneContentCallbacks: (paneId: string) => IPaneContentCallbacks;
+  getPaneUiCallbacks: (paneId: string) => ISplitPaneUiCallbacks;
   getSchemaLength: (name: string, isAsymmetric?: boolean) => number;
   importDialog: null | { filePaths: string[]; classNames: string[] };
   isAddClassOpen: boolean;
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
   isAiSettingsOpen: boolean;
-  aiSettingsInitialTab: AiSettingsModalTab;
   isAndroidTracked: boolean;
   isClassNameAvailable: (name: string) => boolean;
   isCommandPaletteOpen: boolean;
+  isEmbeddedType: IsEmbeddedTypeChecker;
   isEncryptionDialogVisible: boolean;
   isGlobalSearchOpen: boolean;
   isLeftSidebarOpen: boolean;
@@ -87,30 +95,34 @@ export interface IRealmBrowserProps {
     value: unknown;
     onSave?: (updatedJson: string) => void;
   };
+  layout: SplitLayoutNode;
   onAddClass: (schema: Realm.ObjectSchema) => void;
   onAddProperty: (name: string, type: Realm.PropertyType | string) => void;
-  onApplyAiQuery: (query: string) => void;
-  onOpenAiSettingsTab: (tab?: AiSettingsModalTab) => void;
+  onApplyAiQuery: (query: string, targetClassName?: string) => void;
   onBack: () => void;
   onBreadcrumbClick: (index: number) => void;
-  onConfigureAndroidSync: () => void;
   onCancelTransaction: () => void;
   onClassFocussed: ClassFocussedHandler;
+  onCommitBranchRatio: (branchId: string, ratio: number) => void;
   onCommitTransaction: () => void;
+  onConfigureAndroidSync: () => void;
   onDeleteClass: (className: string) => void;
-  onForward: () => void;
-  onHighlightChange: (
-    highlight: IHighlight | undefined,
-    collection: Realm.OrderedCollection<any>
+  onDropPane: (
+    sourcePaneId: string,
+    targetPaneId: string,
+    zone: SplitDropZone
   ) => void;
+  onForward: () => void;
   onHideEncryptionDialog: () => void;
   onHideImportDialog: () => void;
-  onImport: (format: ImportFormat, files: ImportableFile[]) => void;
-  onShowJsonViewerDialog: JsonViewerDialogExecutor;
   onHideJsonViewerDialog: () => void;
+  onImport: (format: ImportFormat, files: ImportableFile[]) => void;
   onLeftSidebarToggle: () => void;
-  onListFocussed: ListFocussedHandler;
-  onSingleListFocussed: SingleListFocussedHandler;
+  onOpenAiSettingsTab: (tab?: AiSettingsModalTab) => void;
+  onOpenInSplitView: (
+    className: string,
+    highlightedObject?: Realm.Object
+  ) => void;
   onOpenWithEncryption: (
     key: string,
     remember?: boolean,
@@ -118,6 +130,10 @@ export interface IRealmBrowserProps {
   ) => void;
   onRealmChanged: () => void;
   onReload: () => void;
+  onResetSinglePane: () => void;
+  onShowJsonViewerDialog: JsonViewerDialogExecutor;
+  onSplitPane: (targetPaneId: string, direction: SplitDirection) => void;
+  panes: Record<string, IPaneViewState | undefined>;
   progress: ILoadingProgress;
   realm?: Realm;
   toggleAddClass: () => void;
@@ -127,11 +143,12 @@ export interface IRealmBrowserProps {
   toggleCommandPalette: () => void;
   toggleGlobalSearch: () => void;
   toggleOverview: () => void;
-  isEmbeddedType: IsEmbeddedTypeChecker;
 }
 
 export const RealmBrowser = ({
   activeObjectId,
+  activePaneId,
+  aiSettingsInitialTab,
   androidAutoSyncSec,
   androidSyncStatus,
   breadcrumbs,
@@ -139,54 +156,56 @@ export const RealmBrowser = ({
   canGoForward,
   classes,
   commandPaletteActions,
-  contentKey,
-  contentRef,
   dataVersion,
   dataVersionAtBeginning,
-  allowCreate,
   editMode,
-  focus,
   getClassFocus,
+  getPaneContentCallbacks,
+  getPaneUiCallbacks,
   getSchemaLength,
   importDialog,
   isAddClassOpen,
   isAddPropertyOpen,
   isAiQueryOpen,
   isAiSettingsOpen,
-  aiSettingsInitialTab,
   isAndroidTracked,
   isClassNameAvailable,
   isCommandPaletteOpen,
+  isEmbeddedType,
   isEncryptionDialogVisible,
   isGlobalSearchOpen,
   isLeftSidebarOpen,
   isOverviewOpen,
   isPropertyNameAvailable,
   jsonViewerDialog,
+  layout,
   onAddClass,
   onAddProperty,
   onApplyAiQuery,
-  onOpenAiSettingsTab,
   onBack,
   onBreadcrumbClick,
-  onConfigureAndroidSync,
   onCancelTransaction,
   onClassFocussed,
+  onCommitBranchRatio,
   onCommitTransaction,
+  onConfigureAndroidSync,
   onDeleteClass,
+  onDropPane,
   onForward,
-  onHighlightChange,
   onHideEncryptionDialog,
   onHideImportDialog,
-  onImport,
-  onShowJsonViewerDialog,
   onHideJsonViewerDialog,
+  onImport,
   onLeftSidebarToggle,
-  onListFocussed,
-  onSingleListFocussed,
+  onOpenAiSettingsTab,
+  onOpenInSplitView,
   onOpenWithEncryption,
   onRealmChanged,
   onReload,
+  onResetSinglePane,
+  onShowJsonViewerDialog,
+  onSplitPane,
+  panes,
   progress,
   realm,
   toggleAddClass,
@@ -195,39 +214,199 @@ export const RealmBrowser = ({
   toggleAiSettings,
   toggleCommandPalette,
   toggleGlobalSearch,
-  toggleOverview,
-  isEmbeddedType
+  toggleOverview
 }: IRealmBrowserProps) => {
-  const activeClassName = focus
-    ? focus.kind === 'class'
-      ? focus.className
-      : focus.property.objectType
+  const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
+
+  // Clear drag state if drag ends or drops outside a valid target
+  useEffect(() => {
+    if (!draggingPaneId) {
+      return;
+    }
+    const clearDrag = () => setDraggingPaneId(null);
+    window.addEventListener('dragend', clearDrag);
+    window.addEventListener('drop', clearDrag);
+    return () => {
+      window.removeEventListener('dragend', clearDrag);
+      window.removeEventListener('drop', clearDrag);
+    };
+  }, [draggingPaneId]);
+
+  const leafIds = useMemo(() => listLeafIds(layout), [layout]);
+
+  const paneOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    leafIds.forEach((id, index) => {
+      map.set(id, index + 1);
+    });
+    return map;
+  }, [leafIds]);
+
+  const totalPanes = leafIds.length;
+  const activePaneNumber = paneOrderMap.get(activePaneId) ?? 1;
+  const activePaneFocus = panes[activePaneId]?.focus ?? null;
+  const activeClassName = activePaneFocus
+    ? getClassName(activePaneFocus)
     : undefined;
+  const hasAnyFocus = Boolean(
+    activePaneFocus || leafIds.some((id) => Boolean(panes[id]?.focus))
+  );
+
+  const secondaryClassNames = useMemo(() => {
+    if (totalPanes <= 1) {
+      return [];
+    }
+    const names = new Set<string>();
+    for (const id of leafIds) {
+      if (id === activePaneId) {
+        continue;
+      }
+      const paneFocus = panes[id]?.focus;
+      if (paneFocus) {
+        names.add(getClassName(paneFocus));
+      }
+    }
+    return Array.from(names);
+  }, [activePaneId, leafIds, panes, totalPanes]);
+
+  const paneCallbacksMap = useMemo(() => {
+    const map = new Map<string, ISplitPaneCallbacks>();
+    for (const id of leafIds) {
+      const ui = getPaneUiCallbacks(id);
+      map.set(id, {
+        ...ui,
+        onDragStart: () => setDraggingPaneId(id)
+      });
+    }
+    return map;
+  }, [getPaneUiCallbacks, leafIds]);
+
+  const getPaneCallbacks = useCallback(
+    (paneId: string): ISplitPaneCallbacks => {
+      return (
+        paneCallbacksMap.get(paneId) ?? {
+          ...getPaneUiCallbacks(paneId),
+          onDragStart: () => setDraggingPaneId(paneId)
+        }
+      );
+    },
+    [getPaneUiCallbacks, paneCallbacksMap]
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDraggingPaneId(null);
+  }, []);
+
+  const handleDropPane = useCallback(
+    (sourcePaneId: string, targetPaneId: string, zone: SplitDropZone) => {
+      setDraggingPaneId(null);
+      onDropPane(sourcePaneId, targetPaneId, zone);
+    },
+    [onDropPane]
+  );
+
+  const handleSplitActiveRight = useCallback(() => {
+    onSplitPane(activePaneId, 'horizontal');
+  }, [activePaneId, onSplitPane]);
+
+  const handleSplitActiveDown = useCallback(() => {
+    onSplitPane(activePaneId, 'vertical');
+  }, [activePaneId, onSplitPane]);
+
+  const renderPaneBody = useCallback(
+    (paneId: string) => {
+      if (!realm) {
+        return <NoFocusPlaceholder />;
+      }
+      const paneState = panes[paneId];
+      if (!paneState || !paneState.focus) {
+        return <NoFocusPlaceholder />;
+      }
+      const paneFocus = paneState.focus;
+      const paneCallbacks = getPaneContentCallbacks(paneId);
+      const isPaneActive = activePaneId === paneId;
+      const contentKey = `${paneId}:${generateKey(paneFocus, true)}`;
+
+      return (
+        <>
+          <Content
+            allowCreate={paneState.allowCreate}
+            dataVersion={dataVersion}
+            dataVersionAtBeginning={dataVersionAtBeginning}
+            editMode={editMode}
+            focus={paneFocus}
+            getClassFocus={getClassFocus}
+            highlightMode={HighlightMode.Multiple}
+            isActivePane={isPaneActive}
+            isEmbeddedType={isEmbeddedType}
+            key={contentKey}
+            onAddColumnClick={paneCallbacks.onAddColumnClick}
+            onAskAi={paneCallbacks.onAskAi}
+            onCancelTransaction={onCancelTransaction}
+            onClassFocussed={paneCallbacks.onClassFocussed}
+            onCommitTransaction={onCommitTransaction}
+            onHighlightChange={paneCallbacks.onHighlightChange}
+            onListFocussed={paneCallbacks.onListFocussed}
+            onRealmChanged={onRealmChanged}
+            onShowJsonViewerDialog={onShowJsonViewerDialog}
+            onSingleListFocussed={paneCallbacks.onSingleListFocussed}
+            paneId={paneId}
+            progress={progress}
+            readOnly={editMode === EditMode.Disabled}
+            realm={realm}
+            ref={paneCallbacks.contentRef}
+          />
+          {paneFocus.kind === 'class' && paneFocus.isEmbedded && (
+            <EmbeddedFocusPlaceholder />
+          )}
+        </>
+      );
+    },
+    [
+      activePaneId,
+      dataVersion,
+      dataVersionAtBeginning,
+      editMode,
+      getClassFocus,
+      getPaneContentCallbacks,
+      isEmbeddedType,
+      onCancelTransaction,
+      onCommitTransaction,
+      onRealmChanged,
+      onShowJsonViewerDialog,
+      panes,
+      progress,
+      realm
+    ]
+  );
 
   return (
     <div className="RealmBrowser">
       <LeftSidebar
         classes={classes}
         className="RealmBrowser__LeftSidebar"
-        focus={focus}
+        focus={activePaneFocus}
         getSchemaLength={getSchemaLength}
         isOpen={isLeftSidebarOpen}
         onClassFocussed={onClassFocussed}
         onDeleteClass={onDeleteClass}
+        onOpenInSplitView={onOpenInSplitView}
         onReload={onReload}
         onToggle={onLeftSidebarToggle}
         progress={progress}
         readOnly={editMode === EditMode.Disabled}
+        secondaryClassNames={secondaryClassNames}
         toggleAddClass={toggleAddClass}
         toggleGlobalSearch={toggleGlobalSearch}
         toggleOverview={toggleOverview}
       />
 
       <div className="RealmBrowser__Wrapper">
-        {focus && realm ? (
+        {hasAnyFocus && realm ? (
           <>
             <NavigationBar
               activeObjectId={activeObjectId}
+              activePaneNumber={activePaneNumber}
               androidAutoSyncSec={androidAutoSyncSec}
               androidSyncStatus={androidSyncStatus}
               breadcrumbs={breadcrumbs}
@@ -235,42 +414,31 @@ export const RealmBrowser = ({
               canGoForward={canGoForward}
               isAndroidTracked={isAndroidTracked}
               onBack={onBack}
-              onForward={onForward}
               onBreadcrumbClick={onBreadcrumbClick}
               onConfigureAndroidSync={onConfigureAndroidSync}
+              onForward={onForward}
+              onResetSinglePane={onResetSinglePane}
+              onSplitDown={handleSplitActiveDown}
+              onSplitRight={handleSplitActiveRight}
+              paneCount={totalPanes}
             />
-            <Content
-              dataVersion={dataVersion}
-              dataVersionAtBeginning={dataVersionAtBeginning}
-              allowCreate={allowCreate}
-              editMode={editMode}
-              focus={focus}
-              getClassFocus={getClassFocus}
-              highlightMode={HighlightMode.Multiple}
-              key={contentKey}
-              onAddColumnClick={toggleAddClassProperty}
-              onAskAi={toggleAiQuery}
-              onCancelTransaction={onCancelTransaction}
-              onClassFocussed={onClassFocussed}
-              onCommitTransaction={onCommitTransaction}
-              onHighlightChange={onHighlightChange}
-              onListFocussed={onListFocussed}
-              onSingleListFocussed={onSingleListFocussed}
-              onRealmChanged={onRealmChanged}
-              onShowJsonViewerDialog={onShowJsonViewerDialog}
-              progress={progress}
-              readOnly={editMode === EditMode.Disabled}
-              realm={realm}
-              ref={contentRef}
-              isEmbeddedType={isEmbeddedType}
+            <SplitNodeRenderer
+              activePaneId={activePaneId}
+              classes={classes}
+              draggingPaneId={draggingPaneId}
+              getPaneCallbacks={getPaneCallbacks}
+              node={layout}
+              onCommitRatio={onCommitBranchRatio}
+              onDragEnd={handleDragEnd}
+              onDropPane={handleDropPane}
+              paneOrderMap={paneOrderMap}
+              panes={panes}
+              renderPaneBody={renderPaneBody}
+              totalPanes={totalPanes}
             />
           </>
         ) : (
-          // TODO: Use the loading overlay until Realm has fully loaded
           <NoFocusPlaceholder />
-        )}
-        {focus && focus.kind === 'class' && focus.isEmbedded && (
-          <EmbeddedFocusPlaceholder />
         )}
       </div>
 
@@ -311,6 +479,8 @@ export const RealmBrowser = ({
         currentQuery=""
         isOpen={isAiQueryOpen}
         onApplyQuery={onApplyAiQuery}
+        onJumpToObject={onClassFocussed}
+        onOpenInSplitView={onOpenInSplitView}
         onOpenKnowledgeBase={() => onOpenAiSettingsTab('kb')}
         onOpenSettings={() => onOpenAiSettingsTab('ai')}
         realm={realm}
@@ -326,9 +496,9 @@ export const RealmBrowser = ({
         toggle={toggleAiSettings}
       />
 
-      {focus && focus.kind === 'class' ? (
+      {activePaneFocus && activePaneFocus.kind === 'class' ? (
         <AddPropertyModal
-          focus={focus}
+          focus={activePaneFocus}
           isOpen={isAddPropertyOpen}
           isPropertyNameAvailable={isPropertyNameAvailable}
           onAddProperty={onAddProperty}
@@ -358,7 +528,7 @@ export const RealmBrowser = ({
         onHide={onHideJsonViewerDialog}
       />
 
-      <LoadingOverlay progress={progress} fade={true} />
+      <LoadingOverlay progress={progress} />
     </div>
   );
 };

@@ -56,6 +56,7 @@ export interface ILeftSidebarProps {
   isOpen: boolean;
   onClassFocussed: ClassFocussedHandler;
   onDeleteClass?: (className: string) => void;
+  onOpenInSplitView?: (className: string) => void;
   onReload: () => void;
   onSearchQueryChange: (query: string) => void;
   onToggle: () => void;
@@ -65,6 +66,7 @@ export interface ILeftSidebarProps {
   readOnly: boolean;
   searchInputRef?: (el: HTMLInputElement | null) => void;
   searchQuery: string;
+  secondaryClassNames?: string[];
   toggleAddClass: () => void;
   toggleGlobalSearch?: () => void;
   toggleOverview?: () => void;
@@ -84,6 +86,7 @@ const LeftSidebarComponent = ({
   isOpen,
   onClassFocussed,
   onDeleteClass,
+  onOpenInSplitView,
   onReload,
   onSearchQueryChange,
   onToggle,
@@ -93,6 +96,7 @@ const LeftSidebarComponent = ({
   readOnly,
   searchInputRef,
   searchQuery,
+  secondaryClassNames,
   toggleAddClass,
   toggleGlobalSearch,
   toggleOverview,
@@ -199,6 +203,14 @@ const LeftSidebarComponent = ({
                     e.stopPropagation();
                     const { Menu, MenuItem } = remote;
                     const menu = new Menu();
+                    if (onOpenInSplitView) {
+                      menu.append(
+                        new MenuItem({
+                          label: `Open "${schema.name}" in Split View`,
+                          click: () => onOpenInSplitView(schema.name)
+                        })
+                      );
+                    }
                     menu.append(
                       new MenuItem({
                         label: isPinned
@@ -249,6 +261,15 @@ const LeftSidebarComponent = ({
                   <span className="LeftSidebar__Class__Name">
                     {schema.name}
                   </span>
+                  {secondaryClassNames?.includes(schema.name) && !selected ? (
+                    <Badge
+                      color="info"
+                      className="mr-1"
+                      title="Open in another Split View pane"
+                    >
+                      Split
+                    </Badge>
+                  ) : null}
                   {schema.embedded ? (
                     <Badge
                       color={highlighted ? 'primary' : 'secondary'}

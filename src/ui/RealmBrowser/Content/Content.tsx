@@ -67,6 +67,7 @@ interface IBaseContentProps {
   focus: Focus;
   hiddenColumns?: string[];
   highlight?: IHighlight;
+  isActivePane?: boolean;
   onAddColumnClick?: () => void;
   onAskAi?: () => void;
   onCellChange: CellChangeHandler;
@@ -129,6 +130,7 @@ export const Content = ({
   focus,
   hiddenColumns,
   highlight,
+  isActivePane = true,
   onAddColumnClick,
   onAskAi,
   onCellChange,
@@ -169,6 +171,7 @@ export const Content = ({
     >
       <TopBar
         allProperties={allProperties}
+        enableGlobalFindShortcut={isActivePane}
         filteredCount={filteredCount}
         focus={focus}
         hiddenColumns={hiddenColumns}

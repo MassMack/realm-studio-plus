@@ -326,8 +326,10 @@ class TableContainer extends React.PureComponent<
   };
 
   private tableRef = (element: HTMLElement | null) => {
-    // Add a keypress listener on the table element
-    if (element) {
+    if (this.tableElement && this.tableElement !== element) {
+      this.tableElement.removeEventListener('keydown', this.onKeyDown);
+    }
+    if (element && element !== this.tableElement) {
       element.addEventListener('keydown', this.onKeyDown);
     }
     this.tableElement = element;

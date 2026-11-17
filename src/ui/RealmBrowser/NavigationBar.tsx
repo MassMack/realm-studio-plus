@@ -34,34 +34,46 @@ export interface IBreadcrumbItem {
 
 export interface INavigationBarProps {
   activeObjectId?: IObjectIdentifier | null;
+  activePaneNumber?: number;
   androidAutoSyncSec?: number;
   androidSyncStatus?: string | null;
   breadcrumbs: IBreadcrumbItem[];
   canGoBack: boolean;
   canGoForward: boolean;
   isAndroidTracked?: boolean;
+  paneCount?: number;
   onBack: () => void;
   onForward: () => void;
   onBreadcrumbClick: (index: number) => void;
   onConfigureAndroidSync?: () => void;
+  onResetSinglePane?: () => void;
+  onSplitDown?: () => void;
+  onSplitRight?: () => void;
 }
 
 const isMac = process.platform === 'darwin';
 const backShortcutHint = isMac ? '⌘[' : 'Alt+←';
 const forwardShortcutHint = isMac ? '⌘]' : 'Alt+→';
+const splitRightShortcutHint = isMac ? '⌘\\' : 'Ctrl+\\';
+const splitDownShortcutHint = isMac ? '⌘⇧\\' : 'Ctrl+Shift+\\';
 
 const NavigationBarComponent = ({
   activeObjectId,
+  activePaneNumber = 1,
   androidAutoSyncSec = 0,
   androidSyncStatus,
   breadcrumbs,
   canGoBack,
   canGoForward,
   isAndroidTracked = false,
+  paneCount = 1,
   onBack,
   onForward,
   onBreadcrumbClick,
-  onConfigureAndroidSync
+  onConfigureAndroidSync,
+  onResetSinglePane,
+  onSplitDown,
+  onSplitRight
 }: INavigationBarProps) => {
   const [copied, setCopied] = useState(false);
 
@@ -185,6 +197,47 @@ const NavigationBarComponent = ({
             ? `Auto Sync: ${androidAutoSyncSec}s${androidSyncStatus ? ` (${androidSyncStatus})` : ''}`
             : 'Android Auto Sync: Off'}
         </Button>
+      ) : null}
+
+      {onSplitRight || onSplitDown ? (
+        <div className="RealmBrowser__NavBar__Buttons">
+          {onSplitRight ? (
+            <Button
+              size="sm"
+              color={paneCount > 1 ? 'primary' : 'secondary'}
+              className="RealmBrowser__NavBar__AndroidSync"
+              onClick={onSplitRight}
+              title={`Split active pane Left/Right (${splitRightShortcutHint})`}
+            >
+              <i className="fa fa-columns" aria-hidden="true" />{' '}
+              {paneCount > 1
+                ? `+ Split Right (${paneCount} panes · #${activePaneNumber})`
+                : 'Split Right'}
+            </Button>
+          ) : null}
+          {onSplitDown ? (
+            <Button
+              size="sm"
+              color="secondary"
+              className="RealmBrowser__NavBar__AndroidSync"
+              onClick={onSplitDown}
+              title={`Split active pane Top/Bottom (${splitDownShortcutHint})`}
+            >
+              + Down
+            </Button>
+          ) : null}
+          {paneCount > 1 && onResetSinglePane ? (
+            <Button
+              size="sm"
+              color="secondary"
+              className="RealmBrowser__NavBar__Btn"
+              onClick={onResetSinglePane}
+              title="Close all other split panes and return to 1 pane"
+            >
+              1 Pane
+            </Button>
+          ) : null}
+        </div>
       ) : null}
 
       {currentId ? (
