@@ -16,7 +16,7 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
@@ -24,6 +24,14 @@ import path from 'path';
 export interface ISimulatorDeviceInfo {
   name: string;
   isBooted: boolean;
+}
+
+export interface ILiveRealmProcessStatus {
+  isIosSimulator: boolean;
+  deviceUdid?: string;
+  deviceName?: string;
+  isSimulatorBooted?: boolean;
+  activeProcessName?: string;
 }
 
 export interface ISimulatorRealmFile {
@@ -51,16 +59,9 @@ export function getDefaultSimulatorRoot(): string {
   return path.join(os.homedir(), 'Library/Developer/CoreSimulator/Devices');
 }
 
-export function getSimulatorDeviceMap(): Map<string, ISimulatorDeviceInfo> {
+function parseSimulatorDeviceJson(raw: string): Map<string, ISimulatorDeviceInfo> {
   const map = new Map<string, ISimulatorDeviceInfo>();
-  if (process.platform !== 'darwin') {
-    return map;
-  }
   try {
-    const raw = execFileSync('xcrun', ['simctl', 'list', 'devices', '-j'], {
-      encoding: 'utf8',
-      timeout: 2000
-    });
     const parsed = JSON.parse(raw) as {
       devices?: Record<
         string,
@@ -80,9 +81,73 @@ export function getSimulatorDeviceMap(): Map<string, ISimulatorDeviceInfo> {
       }
     }
   } catch {
-    // Fallback to UDID if xcrun is unavailable
+    // Fallback to empty map on malformed simctl output
   }
   return map;
+}
+
+export function getSimulatorDeviceMap(): Map<string, ISimulatorDeviceInfo> {
+  if (process.platform !== 'darwin') {
+    return new Map<string, ISimulatorDeviceInfo>();
+  }
+  try {
+    const raw = execFileSync('xcrun', ['simctl', 'list', 'devices', '-j'], {
+      encoding: 'utf8',
+      timeout: 2000
+    });
+    return parseSimulatorDeviceJson(raw);
+  } catch {
+    // Fallback to UDID if xcrun is unavailable
+    return new Map<string, ISimulatorDeviceInfo>();
+  }
+}
+
+export async function getSimulatorDeviceMapAsync(): Promise<
+  Map<string, ISimulatorDeviceInfo>
+> {
+  if (process.platform !== 'darwin') {
+    return new Map<string, ISimulatorDeviceInfo>();
+  }
+  return new Promise((resolve) => {
+    execFile(
+      'xcrun',
+      ['simctl', 'list', 'devices', '-j'],
+      { encoding: 'utf8', timeout: 2500 },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve(new Map<string, ISimulatorDeviceInfo>());
+          return;
+        }
+        resolve(parseSimulatorDeviceJson(stdout));
+      }
+    );
+  });
+}
+
+export function extractSimulatorDeviceUdidFromPath(
+  realmPath: string,
+  simRoot = getDefaultSimulatorRoot()
+): string | null {
+  try {
+    const resolvedRoot = path.resolve(simRoot);
+    const resolvedRealm = path.resolve(realmPath);
+    const rel = path.relative(resolvedRoot, resolvedRealm);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+      return null;
+    }
+    const firstSegment = rel.split(path.sep)[0];
+    // CoreSimulator device directories are UUID-formatted UDIDs
+    if (
+      /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+        firstSegment
+      )
+    ) {
+      return firstSegment;
+    }
+  } catch {
+    // ignore path errors
+  }
+  return null;
 }
 
 interface IRawSimFile {
@@ -119,14 +184,10 @@ function normalizeRealmTargetPath(openPath: string): string {
   return openPath;
 }
 
-function getOpenRealmProcessesOnMac(
-  realmPaths: string[]
-): Map<string, string> {
-  const activeByPath = new Map<string, string>();
-  if (process.platform !== 'darwin' || realmPaths.length === 0) {
-    return activeByPath;
-  }
-
+function collectLsofTargets(realmPaths: string[]): {
+  targets: string[];
+  candidateToRealm: Map<string, string>;
+} {
   const candidateToRealm = new Map<string, string>();
   const targets: string[] = [];
   for (const rPath of realmPaths.slice(0, 40)) {
@@ -144,26 +205,17 @@ function getOpenRealmProcessesOnMac(
       }
     }
   }
-  if (targets.length === 0) {
-    return activeByPath;
-  }
+  return { targets, candidateToRealm };
+}
 
-  let rawOut = '';
-  try {
-    rawOut = execFileSync('lsof', ['-F', 'pcn', '--', ...targets], {
-      encoding: 'utf8',
-      timeout: 1500
-    });
-  } catch (err) {
-    const stdout = (err as { stdout?: unknown })?.stdout;
-    if (typeof stdout === 'string') {
-      rawOut = stdout;
-    }
-  }
-
+export function parseLsofOpenRealmProcesses(
+  rawOut: string,
+  candidateToRealm: Map<string, string>,
+  selfPid = String(process.pid)
+): Map<string, string> {
+  const activeByPath = new Map<string, string>();
   let currentPid = '';
   let currentCmd = '';
-  const selfPid = String(process.pid);
   for (const line of rawOut.split('\n')) {
     if (!line) {
       continue;
@@ -185,6 +237,91 @@ function getOpenRealmProcessesOnMac(
     }
   }
   return activeByPath;
+}
+
+function getOpenRealmProcessesOnMac(
+  realmPaths: string[]
+): Map<string, string> {
+  if (process.platform !== 'darwin' || realmPaths.length === 0) {
+    return new Map<string, string>();
+  }
+
+  const { targets, candidateToRealm } = collectLsofTargets(realmPaths);
+  if (targets.length === 0) {
+    return new Map<string, string>();
+  }
+
+  let rawOut = '';
+  try {
+    rawOut = execFileSync('lsof', ['-F', 'pcn', '--', ...targets], {
+      encoding: 'utf8',
+      timeout: 1500
+    });
+  } catch (err) {
+    const stdout = (err as { stdout?: unknown })?.stdout;
+    if (typeof stdout === 'string') {
+      rawOut = stdout;
+    }
+  }
+
+  return parseLsofOpenRealmProcesses(rawOut, candidateToRealm);
+}
+
+export async function getOpenRealmProcessesOnMacAsync(
+  realmPaths: string[]
+): Promise<Map<string, string>> {
+  if (process.platform !== 'darwin' || realmPaths.length === 0) {
+    return new Map<string, string>();
+  }
+  const { targets, candidateToRealm } = collectLsofTargets(realmPaths);
+  if (targets.length === 0) {
+    return new Map<string, string>();
+  }
+  return new Promise((resolve) => {
+    execFile(
+      'lsof',
+      ['-F', 'pcn', '--', ...targets],
+      { encoding: 'utf8', timeout: 1500 },
+      (err, stdout) => {
+        // lsof exits 1 when no matching open files exist; stdout may still carry partial matches
+        const rawOut =
+          typeof stdout === 'string'
+            ? stdout
+            : typeof (err as { stdout?: unknown } | null)?.stdout === 'string'
+              ? String((err as { stdout?: unknown }).stdout)
+              : '';
+        resolve(parseLsofOpenRealmProcesses(rawOut, candidateToRealm));
+      }
+    );
+  });
+}
+
+export async function inspectSimulatorAndDebugStatusAsync(
+  realmPath: string,
+  simRoot = getDefaultSimulatorRoot()
+): Promise<ILiveRealmProcessStatus> {
+  const deviceUdid = extractSimulatorDeviceUdidFromPath(realmPath, simRoot);
+  const [deviceMap, activeProcesses] = await Promise.all([
+    deviceUdid
+      ? getSimulatorDeviceMapAsync()
+      : Promise.resolve(new Map<string, ISimulatorDeviceInfo>()),
+    getOpenRealmProcessesOnMacAsync([realmPath])
+  ]);
+  const devInfo = deviceUdid ? deviceMap.get(deviceUdid) : undefined;
+  const activeProcessName = activeProcesses.get(realmPath);
+  if (!deviceUdid) {
+    return {
+      isIosSimulator: false,
+      activeProcessName
+    };
+  }
+  return {
+    isIosSimulator: true,
+    deviceUdid,
+    deviceName: devInfo?.name || deviceUdid.slice(0, 8),
+    isSimulatorBooted: !!devInfo?.isBooted,
+    activeProcessName
+  };
 }
 
 function scanContainerForRealmFiles(

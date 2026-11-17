@@ -16,9 +16,15 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
+import classNames from 'classnames';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button } from 'reactstrap';
 
 import { ImportableFile, ImportFormat } from '../../services/data-importer';
+import {
+  ILiveSyncConnectionState,
+  ILiveSyncNotification
+} from '../../services/live-sync-status';
 import { ILoadingProgress, LoadingOverlay } from '../reusable/LoadingOverlay';
 
 import {
@@ -96,6 +102,8 @@ export interface IRealmBrowserProps {
     onSave?: (updatedJson: string) => void;
   };
   layout: SplitLayoutNode;
+  liveSyncNotifications?: ILiveSyncNotification[];
+  liveSyncState?: ILiveSyncConnectionState | null;
   onAddClass: (schema: Realm.ObjectSchema) => void;
   onAddProperty: (name: string, type: Realm.PropertyType | string) => void;
   onApplyAiQuery: (query: string, targetClassName?: string) => void;
@@ -107,11 +115,13 @@ export interface IRealmBrowserProps {
   onCommitTransaction: () => void;
   onConfigureAndroidSync: () => void;
   onDeleteClass: (className: string) => void;
+  onDismissLiveSyncNotification?: (id: string) => void;
   onDropPane: (
     sourcePaneId: string,
     targetPaneId: string,
     zone: SplitDropZone
   ) => void;
+  onEnableAndroidAutoSync?: (seconds: 5 | 10 | 30) => void;
   onForward: () => void;
   onHideEncryptionDialog: () => void;
   onHideImportDialog: () => void;
@@ -179,6 +189,8 @@ export const RealmBrowser = ({
   isPropertyNameAvailable,
   jsonViewerDialog,
   layout,
+  liveSyncNotifications = [],
+  liveSyncState = null,
   onAddClass,
   onAddProperty,
   onApplyAiQuery,
@@ -190,7 +202,9 @@ export const RealmBrowser = ({
   onCommitTransaction,
   onConfigureAndroidSync,
   onDeleteClass,
+  onDismissLiveSyncNotification,
   onDropPane,
+  onEnableAndroidAutoSync,
   onForward,
   onHideEncryptionDialog,
   onHideImportDialog,
@@ -413,6 +427,7 @@ export const RealmBrowser = ({
               canGoBack={canGoBack}
               canGoForward={canGoForward}
               isAndroidTracked={isAndroidTracked}
+              liveSyncState={liveSyncState}
               onBack={onBack}
               onBreadcrumbClick={onBreadcrumbClick}
               onConfigureAndroidSync={onConfigureAndroidSync}
@@ -420,6 +435,7 @@ export const RealmBrowser = ({
               onResetSinglePane={onResetSinglePane}
               onSplitDown={handleSplitActiveDown}
               onSplitRight={handleSplitActiveRight}
+              onSyncNow={onReload}
               paneCount={totalPanes}
             />
             <SplitNodeRenderer
@@ -527,6 +543,70 @@ export const RealmBrowser = ({
         visible={jsonViewerDialog !== null}
         onHide={onHideJsonViewerDialog}
       />
+
+      {liveSyncNotifications.length > 0 ? (
+        <div
+          className="RealmBrowser__SyncToasts"
+          role="status"
+          aria-live="polite"
+        >
+          {liveSyncNotifications.map((item) => (
+            <div
+              key={item.id}
+              className={classNames(
+                'RealmBrowser__SyncToast',
+                `RealmBrowser__SyncToast--${item.tone}`
+              )}
+            >
+              <i
+                className={classNames('fa RealmBrowser__SyncToast__Icon', {
+                  'fa-check-circle text-success': item.tone === 'success',
+                  'fa-plug text-info': item.tone === 'info',
+                  'fa-exclamation-triangle text-warning':
+                    item.tone === 'warning'
+                })}
+                aria-hidden="true"
+              />
+              <div className="RealmBrowser__SyncToast__Body">
+                <div className="RealmBrowser__SyncToast__Title">
+                  {item.title}
+                </div>
+                <div className="RealmBrowser__SyncToast__Detail">
+                  {item.detail}
+                </div>
+                {item.actionLabel && item.actionType ? (
+                  <div className="RealmBrowser__SyncToast__Actions">
+                    <Button
+                      size="sm"
+                      color="success"
+                      onClick={() => {
+                        if (item.actionType === 'enable-android-sync') {
+                          onEnableAndroidAutoSync?.(5);
+                        } else if (item.actionType === 'reload') {
+                          onReload();
+                        }
+                        onDismissLiveSyncNotification?.(item.id);
+                      }}
+                    >
+                      {item.actionLabel}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+              {onDismissLiveSyncNotification ? (
+                <button
+                  type="button"
+                  className="RealmBrowser__SyncToast__Close"
+                  aria-label="Dismiss notification"
+                  onClick={() => onDismissLiveSyncNotification(item.id)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <LoadingOverlay progress={progress} />
     </div>

@@ -21,6 +21,11 @@ import React, { useState } from 'react';
 import { Button } from 'reactstrap';
 import Realm from 'realm';
 
+import {
+  buildLiveSyncBadge,
+  ILiveSyncConnectionState
+} from '../../services/live-sync-status';
+
 import { formatShortIdValue, IObjectIdentifier } from './display';
 import { Focus } from './focus';
 
@@ -41,6 +46,7 @@ export interface INavigationBarProps {
   canGoBack: boolean;
   canGoForward: boolean;
   isAndroidTracked?: boolean;
+  liveSyncState?: ILiveSyncConnectionState | null;
   paneCount?: number;
   onBack: () => void;
   onForward: () => void;
@@ -49,6 +55,7 @@ export interface INavigationBarProps {
   onResetSinglePane?: () => void;
   onSplitDown?: () => void;
   onSplitRight?: () => void;
+  onSyncNow?: () => void;
 }
 
 const isMac = process.platform === 'darwin';
@@ -66,6 +73,7 @@ const NavigationBarComponent = ({
   canGoBack,
   canGoForward,
   isAndroidTracked = false,
+  liveSyncState = null,
   paneCount = 1,
   onBack,
   onForward,
@@ -73,9 +81,11 @@ const NavigationBarComponent = ({
   onConfigureAndroidSync,
   onResetSinglePane,
   onSplitDown,
-  onSplitRight
+  onSplitRight,
+  onSyncNow
 }: INavigationBarProps) => {
   const [copied, setCopied] = useState(false);
+  const liveBadge = buildLiveSyncBadge(liveSyncState);
 
   const currentId =
     activeObjectId ??
@@ -171,7 +181,40 @@ const NavigationBarComponent = ({
         })}
       </nav>
 
-      {isAndroidTracked && onConfigureAndroidSync ? (
+      {liveBadge.visible ? (
+        <Button
+          size="sm"
+          color={liveBadge.color}
+          className="RealmBrowser__NavBar__AndroidSync RealmBrowser__NavBar__LiveSync"
+          onClick={
+            liveSyncState?.source === 'android-adb'
+              ? onConfigureAndroidSync
+              : onSyncNow
+          }
+          title={liveBadge.tooltip}
+        >
+          {liveBadge.pulse ? (
+            <span
+              className="RealmBrowser__NavBar__SyncDot"
+              aria-hidden="true"
+            />
+          ) : null}
+          <i
+            className={classNames('fa', {
+              'fa-refresh fa-spin': liveBadge.spinning,
+              'fa-android':
+                !liveBadge.spinning && liveSyncState?.source === 'android-adb',
+              'fa-mobile':
+                !liveBadge.spinning &&
+                liveSyncState?.source === 'ios-simulator',
+              'fa-bug':
+                !liveBadge.spinning && liveSyncState?.source === 'local-debug'
+            })}
+            aria-hidden="true"
+          />{' '}
+          {liveBadge.label}
+        </Button>
+      ) : isAndroidTracked && onConfigureAndroidSync ? (
         <Button
           size="sm"
           color={androidAutoSyncSec > 0 ? 'success' : 'secondary'}

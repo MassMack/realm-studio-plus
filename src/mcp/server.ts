@@ -80,7 +80,7 @@ function wrapReadOnly<Args>(
   };
 }
 
-export function createRealmMcpServer(version = '1.0.0'): McpServer {
+export function createRealmMcpServer(version = '1.1.0'): McpServer {
   const server = new McpServer({
     name: 'realm-studio-plus',
     version

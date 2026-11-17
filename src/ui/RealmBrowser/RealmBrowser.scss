@@ -176,6 +176,109 @@
       padding: ($spacer * .2) ($spacer * .5);
       white-space: nowrap;
     }
+
+    &__LiveSync {
+      align-items: center;
+      display: inline-flex;
+      gap: .35rem;
+      max-width: 340px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    &__SyncDot {
+      animation: realm-sync-pulse 1.6s ease-in-out infinite;
+      background-color: currentcolor;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+      height: .45rem;
+      width: .45rem;
+    }
+  }
+
+  &__SyncToasts {
+    bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    max-width: 380px;
+    pointer-events: none;
+    position: fixed;
+    right: 1rem;
+    z-index: 20;
+  }
+
+  &__SyncToast {
+    align-items: flex-start;
+    background: var(--rs-surface);
+    border: 1px solid var(--rs-border);
+    border-left-width: 4px;
+    border-radius: .4rem;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+    color: inherit;
+    display: flex;
+    gap: .6rem;
+    padding: .65rem .75rem;
+    pointer-events: auto;
+
+    &--success {
+      border-left-color: #28a745;
+    }
+
+    &--info {
+      border-left-color: #17a2b8;
+    }
+
+    &--warning {
+      border-left-color: #ffc107;
+    }
+
+    &__Icon {
+      flex-shrink: 0;
+      font-size: .95rem;
+      margin-top: .15rem;
+    }
+
+    &__Body {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    &__Title {
+      font-size: .82rem;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+
+    &__Detail {
+      color: var(--rs-text-muted);
+      font-size: .76rem;
+      line-height: 1.35;
+      margin-top: .15rem;
+      word-break: break-word;
+    }
+
+    &__Actions {
+      display: flex;
+      gap: .4rem;
+      margin-top: .4rem;
+    }
+
+    &__Close {
+      background: transparent;
+      border: 0;
+      color: var(--rs-text-muted);
+      cursor: pointer;
+      flex-shrink: 0;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0 .15rem;
+
+      &:hover {
+        color: inherit;
+      }
+    }
   }
 
   &__OverviewSummary {
@@ -1001,5 +1104,18 @@
         margin-left: $spacer * .5;
       }
     }
+  }
+}
+
+@keyframes realm-sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: .4;
+    transform: scale(.82);
   }
 }

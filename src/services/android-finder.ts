@@ -48,7 +48,9 @@ export interface IAndroidScanResult {
   files: IAndroidRealmFile[];
 }
 
-export function resolveAdbBinary(): string | null {
+let cachedAdbBinary: string | null | undefined;
+
+function getAdbCandidates(): string[] {
   const sdkEnv = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
   const adbExe = process.platform === 'win32' ? 'adb.exe' : 'adb';
   const candidates: string[] = [];
@@ -69,13 +71,33 @@ export function resolveAdbBinary(): string | null {
     );
   }
   candidates.push(adbExe);
+  return candidates;
+}
 
-  for (const candidate of candidates) {
+export function resolveAdbBinary(): string | null {
+  for (const candidate of getAdbCandidates()) {
     try {
       execFileSync(candidate, ['version'], {
         stdio: 'ignore',
         timeout: 2000
       });
+      cachedAdbBinary = candidate;
+      return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+export async function resolveAdbBinaryAsync(): Promise<string | null> {
+  if (cachedAdbBinary) {
+    return cachedAdbBinary;
+  }
+  for (const candidate of getAdbCandidates()) {
+    try {
+      await execFileAsync(candidate, ['version'], 2000);
+      cachedAdbBinary = candidate;
       return candidate;
     } catch {
       // try next candidate
@@ -676,7 +698,7 @@ export async function hasAndroidRemoteFileChanged(
   if (!meta || !meta.serial) {
     return false;
   }
-  const adbBin = resolveAdbBinary();
+  const adbBin = await resolveAdbBinaryAsync();
   if (!adbBin) {
     throw new Error('ADB binary not found');
   }
@@ -700,6 +722,74 @@ export async function hasAndroidRemoteFileChanged(
   );
 }
 
+export interface IAndroidConnectionStatus {
+  isTracked: boolean;
+  isConnected: boolean;
+  isEmulator: boolean;
+  isAppRunning: boolean;
+  deviceName?: string;
+  pkg?: string;
+  serial?: string;
+}
+
+export async function inspectAndroidConnectionStatusAsync(
+  localRealmPath: string
+): Promise<IAndroidConnectionStatus | null> {
+  const meta = getTrackedAndroidRealmInfo(localRealmPath);
+  if (!meta || !meta.serial) {
+    return null;
+  }
+  const adbBin = await resolveAdbBinaryAsync();
+  if (!adbBin) {
+    return {
+      isTracked: true,
+      isConnected: false,
+      isEmulator: Boolean(meta.isEmulator),
+      isAppRunning: false,
+      deviceName: meta.deviceName,
+      pkg: meta.pkg,
+      serial: meta.serial
+    };
+  }
+  const devices = await listAdbDevices(adbBin).catch(() => []);
+  const ready = devices.find(
+    (d) => d.serial === meta.serial && d.state === 'device'
+  );
+  if (!ready) {
+    return {
+      isTracked: true,
+      isConnected: false,
+      isEmulator: Boolean(meta.isEmulator),
+      isAppRunning: false,
+      deviceName: meta.deviceName,
+      pkg: meta.pkg,
+      serial: meta.serial
+    };
+  }
+  let isAppRunning = false;
+  if (meta.pkg && isValidAndroidPackage(meta.pkg)) {
+    try {
+      const pidOut = await execFileAsync(
+        adbBin,
+        ['-s', meta.serial, 'shell', `pidof ${shellSingleQuote(meta.pkg)} 2>/dev/null || true`],
+        3000
+      );
+      isAppRunning = Boolean(pidOut.trim().split(/\s+/)[0]);
+    } catch {
+      isAppRunning = false;
+    }
+  }
+  return {
+    isTracked: true,
+    isConnected: true,
+    isEmulator: ready.isEmulator,
+    isAppRunning,
+    deviceName: ready.model || meta.deviceName || meta.serial,
+    pkg: meta.pkg,
+    serial: meta.serial
+  };
+}
+
 export async function refreshLocalAndroidRealmIfTracked(
   localRealmPath: string
 ): Promise<boolean> {
@@ -708,7 +798,7 @@ export async function refreshLocalAndroidRealmIfTracked(
     return false;
   }
 
-  const adbBin = resolveAdbBinary();
+  const adbBin = await resolveAdbBinaryAsync();
   if (!adbBin) {
     return false;
   }

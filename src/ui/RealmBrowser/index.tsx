@@ -40,6 +40,13 @@ import {
   getCandidateKeysForPath,
   saveEncryptionKeyForPath
 } from '../../services/encryption-keys';
+import {
+  createDataSyncedNotification,
+  evaluateLiveSyncTransition,
+  ILiveSyncConnectionState,
+  ILiveSyncNotification,
+  probeLiveSyncState
+} from '../../services/live-sync-status';
 import { Language, SchemaExporter } from '../../services/schema-export';
 import { menu } from '../../utils';
 import {
@@ -205,6 +212,8 @@ export interface IRealmBrowserState extends IRealmLoadingComponentState {
   importDialog: ImportDialogOptions | null;
   jsonViewerDialog: JsonViewerDialogOptions | null;
   layout: SplitLayoutNode;
+  liveSyncNotifications: ILiveSyncNotification[];
+  liveSyncState: ILiveSyncConnectionState | null;
   panes: Record<string, IPaneViewState | undefined>;
   // The classes are only supposed to be used to produce a list of classes in the sidebar
   classes: Realm.ObjectSchema[];
@@ -239,6 +248,8 @@ class RealmBrowserContainer
     importDialog: null,
     jsonViewerDialog: null,
     layout: createInitialLayout(INITIAL_PANE_ID),
+    liveSyncNotifications: [],
+    liveSyncState: null,
     panes: {
       [INITIAL_PANE_ID]: createEmptyPaneState(INITIAL_PANE_ID)
     },
@@ -262,8 +273,13 @@ class RealmBrowserContainer
   private watcherDisabled = false;
   private isReloading = false;
   private readonly activeSessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  private static readonly LIVE_SYNC_POLL_MS = 5000;
   private androidSyncTimer: ReturnType<typeof setInterval> | null = null;
   private isAndroidSyncTicking = false;
+  private liveSyncPollTimer: ReturnType<typeof setInterval> | null = null;
+  private liveSyncToastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private isLiveSyncProbing = false;
+  private isComponentMounted = false;
   private untriedCandidateKeys: string[] | null = null;
   private pendingEncryptionSave?: {
     key: string;
@@ -272,15 +288,19 @@ class RealmBrowserContainer
   };
 
   public componentDidMount() {
+    this.isComponentMounted = true;
     this.loadRealm(
       this.props.realm,
       this.props.import ? this.props.import.schema : undefined
     ).then(() => this.startWatchingRealmFile());
+    this.startLiveSyncMonitor();
     this.addListeners();
   }
 
   public componentWillUnmount() {
+    this.isComponentMounted = false;
     this.stopAndroidAutoSync();
+    this.stopLiveSyncMonitor();
     unregisterOpenRealmSession(this.activeSessionId);
     super.componentWillUnmount();
     this.removeListeners();
@@ -341,6 +361,8 @@ class RealmBrowserContainer
         isPropertyNameAvailable={this.isPropertyNameAvailable}
         jsonViewerDialog={this.state.jsonViewerDialog}
         layout={layout}
+        liveSyncNotifications={this.state.liveSyncNotifications}
+        liveSyncState={this.state.liveSyncState}
         onAddClass={this.onAddClass}
         onAddProperty={this.onAddProperty}
         onApplyAiQuery={this.onApplyAiQuery}
@@ -352,7 +374,9 @@ class RealmBrowserContainer
         onCommitTransaction={this.onCommitTransaction}
         onConfigureAndroidSync={this.onConfigureAndroidSync}
         onDeleteClass={this.onDeleteClass}
+        onDismissLiveSyncNotification={this.dismissLiveSyncNotification}
         onDropPane={this.onDropPane}
+        onEnableAndroidAutoSync={this.setAndroidAutoSync}
         onForward={this.onNavigateForward}
         onHideEncryptionDialog={this.onHideEncryptionDialog}
         onHideImportDialog={this.onHideImportDialog}
@@ -715,12 +739,17 @@ class RealmBrowserContainer
       schemaVersion: this.realm.schemaVersion
     });
 
-    this.setState({
-      activePaneId: activeLeafId,
-      classes: this.realm.schema,
-      isAndroidTracked,
-      panes: nextPanes
-    });
+    this.setState(
+      {
+        activePaneId: activeLeafId,
+        classes: this.realm.schema,
+        isAndroidTracked,
+        panes: nextPanes
+      },
+      () => {
+        void this.refreshLiveSyncStatus({ notifyTransition: true });
+      }
+    );
     // Start importing data if needed
     if (this.props.import && this.realm) {
       const { format, paths } = this.props.import;
@@ -2058,7 +2087,9 @@ class RealmBrowserContainer
     // it was previously disabled by the rate limiter.
     this.reloadAttemptTimestamps = [];
     this.watcherDisabled = false;
-    void this.reloadFromDisk({ rePullAndroid: true });
+    void this.reloadFromDisk({ rePullAndroid: true }).then(() =>
+      this.refreshLiveSyncStatus({ notifyTransition: false })
+    );
   };
 
   private stopAndroidAutoSync = () => {
@@ -2068,15 +2099,143 @@ class RealmBrowserContainer
     }
   };
 
+  private startLiveSyncMonitor = () => {
+    this.stopLiveSyncMonitor();
+    this.liveSyncPollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+      void this.refreshLiveSyncStatus({ notifyTransition: true });
+    }, RealmBrowserContainer.LIVE_SYNC_POLL_MS);
+  };
+
+  private stopLiveSyncMonitor = () => {
+    if (this.liveSyncPollTimer) {
+      clearInterval(this.liveSyncPollTimer);
+      this.liveSyncPollTimer = null;
+    }
+    for (const timer of this.liveSyncToastTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.liveSyncToastTimers.clear();
+  };
+
+  private dismissLiveSyncNotification = (id: string) => {
+    const existingTimer = this.liveSyncToastTimers.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.liveSyncToastTimers.delete(id);
+    }
+    if (!this.isComponentMounted) {
+      return;
+    }
+    this.setState((prev) => ({
+      liveSyncNotifications: prev.liveSyncNotifications.filter(
+        (n) => n.id !== id
+      )
+    }));
+  };
+
+  private pushLiveSyncNotification = (
+    notification: ILiveSyncNotification | null
+  ) => {
+    if (!notification || !this.isComponentMounted) {
+      return;
+    }
+    this.setState((prev) => {
+      // Replace any older toast in the same category so updates never spam the screen
+      const filtered = prev.liveSyncNotifications.filter((existing) => {
+        if (existing.category === notification.category) {
+          const oldTimer = this.liveSyncToastTimers.get(existing.id);
+          if (oldTimer) {
+            clearTimeout(oldTimer);
+            this.liveSyncToastTimers.delete(existing.id);
+          }
+          return false;
+        }
+        return true;
+      });
+      return {
+        liveSyncNotifications: [...filtered, notification].slice(-2)
+      };
+    });
+    const autoHideMs = notification.category === 'connection' ? 6500 : 4500;
+    const timer = setTimeout(() => {
+      this.dismissLiveSyncNotification(notification.id);
+    }, autoHideMs);
+    this.liveSyncToastTimers.set(notification.id, timer);
+  };
+
+  private refreshLiveSyncStatus = async (options?: {
+    notifyTransition?: boolean;
+  }) => {
+    const realmPath = this.realm?.path || this.props.realm?.path;
+    if (!realmPath || this.isLiveSyncProbing || !this.isComponentMounted) {
+      return;
+    }
+    this.isLiveSyncProbing = true;
+    try {
+      const next = await probeLiveSyncState(realmPath, {
+        isWatchingDisk: Boolean(this.fileWatcher) && !this.watcherDisabled,
+        autoSyncSec: this.state.androidAutoSyncSec,
+        autoSyncStatus: this.state.androidSyncStatus,
+        lastSyncedAt: this.state.liveSyncState?.lastSyncedAt
+      });
+      if (!this.isComponentMounted) {
+        return;
+      }
+      const prev = this.state.liveSyncState;
+      const transitionNotification = options?.notifyTransition
+        ? evaluateLiveSyncTransition(prev, next)
+        : null;
+      this.setState({ liveSyncState: next });
+      if (transitionNotification) {
+        this.pushLiveSyncNotification(transitionNotification);
+      }
+    } finally {
+      this.isLiveSyncProbing = false;
+    }
+  };
+
   private setAndroidAutoSync = (seconds: 0 | 5 | 10 | 30) => {
     this.stopAndroidAutoSync();
     if (seconds <= 0) {
-      this.setState({ androidAutoSyncSec: 0, androidSyncStatus: null });
+      this.setState(
+        (prev) => ({
+          androidAutoSyncSec: 0,
+          androidSyncStatus: null,
+          liveSyncState: prev.liveSyncState
+            ? {
+                ...prev.liveSyncState,
+                autoSyncSec: 0,
+                autoSyncStatus: null
+              }
+            : null
+        }),
+        () => {
+          void this.refreshLiveSyncStatus({ notifyTransition: false });
+        }
+      );
       return;
     }
-    this.setState({
+    this.setState((prev) => ({
       androidAutoSyncSec: seconds,
-      androidSyncStatus: 'Active'
+      androidSyncStatus: 'Active',
+      liveSyncState: prev.liveSyncState
+        ? {
+            ...prev.liveSyncState,
+            autoSyncSec: seconds,
+            autoSyncStatus: 'Active'
+          }
+        : null
+    }));
+    this.pushLiveSyncNotification({
+      id: `conn-${Date.now()}`,
+      category: 'connection',
+      tone: 'success',
+      title: `Android Auto Sync Active (${seconds}s)`,
+      detail: `Checking connected Android device every ${seconds} seconds for live Realm updates.`,
+      timestamp: Date.now()
     });
     this.androidSyncTimer = setInterval(() => {
       void this.onAndroidAutoSyncTick();
@@ -2094,28 +2253,62 @@ class RealmBrowserContainer
       return;
     }
     this.isAndroidSyncTicking = true;
-    this.setState({ androidSyncStatus: 'Checking...' });
+    this.setState((prev) => ({
+      androidSyncStatus: 'Checking...',
+      liveSyncState: prev.liveSyncState
+        ? { ...prev.liveSyncState, autoSyncStatus: 'Checking...' }
+        : null
+    }));
     try {
       const changed = await hasAndroidRemoteFileChanged(this.props.realm.path);
       if (!changed) {
         if (this.state.androidAutoSyncSec > 0) {
-          this.setState({ androidSyncStatus: 'Up to date' });
+          this.setState((prev) => ({
+            androidSyncStatus: 'Up to date',
+            liveSyncState: prev.liveSyncState
+              ? { ...prev.liveSyncState, autoSyncStatus: 'Up to date' }
+              : null
+          }));
         }
         return;
       }
-      this.setState({ androidSyncStatus: 'Pulling update...' });
-      await this.reloadFromDisk({ rePullAndroid: true, quietOnError: true });
+      this.setState((prev) => ({
+        androidSyncStatus: 'Pulling update...',
+        liveSyncState: prev.liveSyncState
+          ? { ...prev.liveSyncState, autoSyncStatus: 'Pulling update...' }
+          : null
+      }));
+      await this.reloadFromDisk({
+        rePullAndroid: true,
+        quietOnError: true,
+        isBackgroundSync: true
+      });
       if (this.state.androidAutoSyncSec > 0) {
         const syncedAt = new Date().toLocaleTimeString([], {
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit'
         });
-        this.setState({ androidSyncStatus: `Synced ${syncedAt}` });
+        const statusText = `Synced ${syncedAt}`;
+        this.setState((prev) => ({
+          androidSyncStatus: statusText,
+          liveSyncState: prev.liveSyncState
+            ? { ...prev.liveSyncState, autoSyncStatus: statusText }
+            : null
+        }));
       }
     } catch {
       if (this.state.androidAutoSyncSec > 0) {
-        this.setState({ androidSyncStatus: 'ADB offline' });
+        this.setState((prev) => ({
+          androidSyncStatus: 'ADB offline',
+          liveSyncState: prev.liveSyncState
+            ? {
+                ...prev.liveSyncState,
+                connected: false,
+                autoSyncStatus: 'ADB offline'
+              }
+            : null
+        }));
       }
     } finally {
       this.isAndroidSyncTicking = false;
@@ -2126,6 +2319,20 @@ class RealmBrowserContainer
     const { Menu, MenuItem } = remote;
     const menu = new Menu();
     const cur = this.state.androidAutoSyncSec;
+    const live = this.state.liveSyncState;
+
+    if (live && live.source === 'android-adb') {
+      const connLabel = live.connected
+        ? `${live.isEmulator ? 'Emulator' : 'Device'}: ${live.deviceName || 'ADB'} · ${live.isDebugging ? `Debugging ${live.processName || 'app'}` : 'Connected'}`
+        : `${live.deviceName || 'Android'} · ADB Offline`;
+      menu.append(
+        new MenuItem({
+          label: connLabel,
+          enabled: false
+        })
+      );
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
 
     for (const sec of [5, 10, 30] as const) {
       menu.append(
@@ -2158,6 +2365,7 @@ class RealmBrowserContainer
   private reloadFromDisk = async (options?: {
     rePullAndroid?: boolean;
     quietOnError?: boolean;
+    isBackgroundSync?: boolean;
   }) => {
     if (this.isReloading) {
       return;
@@ -2251,6 +2459,28 @@ class RealmBrowserContainer
       );
       if (syncError) {
         throw syncError;
+      }
+      if (options?.isBackgroundSync && this.isComponentMounted) {
+        const syncedNow = Date.now();
+        const curState = this.state.liveSyncState
+          ? {
+              ...this.state.liveSyncState,
+              isWatchingDisk: !this.watcherDisabled,
+              lastSyncedAt: syncedNow
+            }
+          : {
+              source: 'none' as const,
+              connected: false,
+              isDebugging: false,
+              isWatchingDisk: !this.watcherDisabled,
+              autoSyncSec: this.state.androidAutoSyncSec,
+              autoSyncStatus: this.state.androidSyncStatus,
+              lastSyncedAt: syncedNow
+            };
+        this.setState({ liveSyncState: curState });
+        this.pushLiveSyncNotification(
+          createDataSyncedNotification(curState, syncedNow)
+        );
       }
     } finally {
       this.startWatchingRealmFile();
@@ -2385,7 +2615,7 @@ class RealmBrowserContainer
         // File has been quiet for one full poll interval. Safe to reload.
         this.lastStableStat = null;
         if (this.recordAndCheckReloadAttempt()) {
-          void this.reloadFromDisk();
+          void this.reloadFromDisk({ isBackgroundSync: true });
         }
         return;
       }
