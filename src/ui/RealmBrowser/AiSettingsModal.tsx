@@ -34,6 +34,7 @@ import {
   ModalFooter,
   ModalHeader
 } from 'reactstrap';
+import Realm from 'realm';
 
 import {
   listActiveRealmsPublic,
@@ -46,6 +47,12 @@ import {
   setAiApiKey,
   testAiConnection
 } from '../../services/ai';
+import {
+  indexProjectSourceDir,
+  IRealmKnowledgeBase,
+  loadKnowledgeBaseForRealm,
+  saveKnowledgeBase
+} from '../../services/ai-knowledge-base';
 import { getCandidateKeysForPath } from '../../services/encryption-keys';
 import {
   AI_PROVIDER_LABELS,
@@ -56,14 +63,26 @@ import {
   settings
 } from '../../services/settings';
 
+export type AiSettingsModalTab = 'ai' | 'kb' | 'mcp';
+
 export interface IAiSettingsModalProps {
+  activeClassName?: string;
+  classes?: Realm.ObjectSchema[];
+  initialTab?: AiSettingsModalTab;
   isOpen: boolean;
-  toggle: () => void;
   onSaved?: (saved: IAiSettings) => void;
+  realm?: Realm;
+  toggle: () => void;
 }
 
 const MODEL_SUGGESTIONS: Readonly<Record<AiProvider, string[]>> = {
-  ollama: ['qwen2.5:7b', 'llama3.2:3b', 'llama3.1:8b', 'gemma3:4b'],
+  ollama: [
+    'qwen2.5:7b',
+    'qwen2.5-coder:7b',
+    'qwen2.5:14b',
+    'qwen3:8b',
+    'llama3.1:8b'
+  ],
   gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
   openai: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'],
   anthropic: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-latest']
@@ -153,11 +172,16 @@ function buildMcpConfigSnippet(
 }
 
 export const AiSettingsModal = ({
+  activeClassName,
+  classes = [],
+  initialTab = 'ai',
   isOpen,
-  toggle,
-  onSaved
+  onSaved,
+  realm,
+  toggle
 }: IAiSettingsModalProps) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'mcp'>('ai');
+  const [selectedTab, setSelectedTab] = useState<AiSettingsModalTab | null>(null);
+  const activeTab = selectedTab ?? initialTab;
   const [mcpFormat, setMcpFormat] = useState<McpClientFormat>('vscode');
   const [includeSavedKeyInEnv, setIncludeSavedKeyInEnv] = useState(false);
   const [openRealmsCount, setOpenRealmsCount] = useState(0);
@@ -175,20 +199,45 @@ export const AiSettingsModal = ({
     message: string;
   } | null>(null);
 
+  const [kb, setKb] = useState<IRealmKnowledgeBase | null>(null);
+  const [kbClassName, setKbClassName] = useState('');
+  const [kbStatus, setKbStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  const nonSystemClasses = classes.filter((c) => !c.name.startsWith('__'));
+
   const handleOpened = () => {
     const current = settings.getAiSettings();
+    setSelectedTab(null);
     setForm(current);
     setApiKey(getAiApiKey(current.provider));
     setShowKey(false);
     setTestResult(null);
     setOllamaModels([]);
     setCopiedMcp(false);
+    setKbStatus(null);
+
     const active = listActiveRealmsPublic();
     setOpenRealmsCount(active.length);
-    setActiveRealmName(
-      active[0] ? path.basename(active[0].path) : null
-    );
+    setActiveRealmName(active[0] ? path.basename(active[0].path) : null);
     setHasAutoUnlockKey(getPreferredEncryptionKeyHex().length > 0);
+
+    const realmPath = realm?.path || active[0]?.path || '';
+    if (realmPath || nonSystemClasses.length > 0) {
+      const loaded = loadKnowledgeBaseForRealm(realmPath, classes);
+      setKb(loaded);
+      const defaultCls =
+        (activeClassName &&
+        nonSystemClasses.some((c) => c.name === activeClassName)
+          ? activeClassName
+          : nonSystemClasses[0]?.name) || '';
+      setKbClassName(defaultCls);
+    } else {
+      setKb(null);
+      setKbClassName('');
+    }
   };
 
   const mcpConfigJson = buildMcpConfigSnippet(mcpFormat, includeSavedKeyInEnv);
@@ -240,15 +289,147 @@ export const AiSettingsModal = ({
     setIsTesting(false);
   };
 
+  const handleBrowseSourceDir = async () => {
+    if (!kb) {
+      return;
+    }
+    try {
+      const res = await remote.dialog.showOpenDialog(remote.getCurrentWindow(), {
+        title: 'Select App Source Folder (Swift / Kotlin / Dart / TS)',
+        properties: ['openDirectory']
+      });
+      if (!res.canceled && res.filePaths[0]) {
+        const chosenDir = res.filePaths[0];
+        const { symbols, scannedFiles } = indexProjectSourceDir(
+          chosenDir,
+          classes
+        );
+        const updated = saveKnowledgeBase({
+          ...kb,
+          sourceDir: chosenDir,
+          indexedSymbols: symbols,
+          lastIndexedAt: new Date().toISOString()
+        });
+        setKb(updated);
+        setKbStatus({
+          ok: true,
+          message: `Indexed ${symbols.length} model/enum/doc snippets from ${scannedFiles} source files.`
+        });
+      }
+    } catch (err) {
+      setKbStatus({
+        ok: false,
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
+
+  const handleIndexSourceDir = () => {
+    if (!kb || !kb.sourceDir?.trim()) {
+      setKbStatus({
+        ok: false,
+        message: 'Please select or enter a local source folder first.'
+      });
+      return;
+    }
+    try {
+      const { symbols, scannedFiles } = indexProjectSourceDir(
+        kb.sourceDir,
+        classes
+      );
+      const updated = saveKnowledgeBase({
+        ...kb,
+        indexedSymbols: symbols,
+        lastIndexedAt: new Date().toISOString()
+      });
+      setKb(updated);
+      setKbStatus({
+        ok: true,
+        message: `Indexed ${symbols.length} model/enum/doc snippets from ${scannedFiles} source files.`
+      });
+    } catch (err) {
+      setKbStatus({
+        ok: false,
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
+
+  const updateKbClassDescription = (className: string, description: string) => {
+    setKb((prev) => {
+      if (!prev || !className) {
+        return prev;
+      }
+      const existing = prev.classes[className] || {};
+      return {
+        ...prev,
+        classes: {
+          ...prev.classes,
+          [className]: {
+            ...existing,
+            description
+          }
+        }
+      };
+    });
+  };
+
+  const updateKbPropertyDescription = (
+    className: string,
+    propName: string,
+    description: string
+  ) => {
+    setKb((prev) => {
+      if (!prev || !className || !propName) {
+        return prev;
+      }
+      const existing = prev.classes[className] || {};
+      const nextProps = { ...(existing.properties || {}) };
+      if (description.trim()) {
+        nextProps[propName] = description;
+      } else {
+        delete nextProps[propName];
+      }
+      return {
+        ...prev,
+        classes: {
+          ...prev.classes,
+          [className]: {
+            ...existing,
+            properties: nextProps
+          }
+        }
+      };
+    });
+  };
+
   const handleSave = () => {
     const saved = settings.setAiSettings(form);
     if (form.provider !== 'ollama') {
       setAiApiKey(form.provider, apiKey);
     }
+    if (kb) {
+      saveKnowledgeBase(kb);
+    }
     if (onSaved) {
       onSaved(saved);
     }
     toggle();
+  };
+
+  const handleSaveKbOnly = (closeAfter = false) => {
+    if (!kb) {
+      return;
+    }
+    const saved = saveKnowledgeBase(kb);
+    setKb(saved);
+    setKbStatus({
+      ok: true,
+      message: 'Domain Knowledge Base saved for both Local AI and MCP Schema.'
+    });
+    if (closeAfter) {
+      toggle();
+    }
   };
 
   const encryptedSupported = isApiKeyEncryptionAvailable();
@@ -257,24 +438,42 @@ export const AiSettingsModal = ({
       ? ollamaModels
       : MODEL_SUGGESTIONS[form.provider];
 
+  const selectedSchema = nonSystemClasses.find((c) => c.name === kbClassName);
+  const selectedProps = selectedSchema
+    ? Object.keys(selectedSchema.properties)
+    : [];
+
   return (
-    <Modal isOpen={isOpen} toggle={toggle} onOpened={handleOpened} size="md">
+    <Modal
+      isOpen={isOpen}
+      toggle={toggle}
+      onOpened={handleOpened}
+      onClosed={() => setSelectedTab(null)}
+      size="lg"
+    >
       <ModalHeader toggle={toggle}>
-        <i className="fa fa-sliders" aria-hidden="true" /> AI Assistant &amp; MCP
-        Settings
+        <i className="fa fa-sliders" aria-hidden="true" /> AI Assistant, Domain
+        Knowledge Base &amp; MCP Settings
       </ModalHeader>
       <ModalBody>
         <div className="mb-3">
           <ButtonGroup size="sm">
             <Button
               color={activeTab === 'ai' ? 'primary' : 'secondary'}
-              onClick={() => setActiveTab('ai')}
+              onClick={() => setSelectedTab('ai')}
             >
               <i className="fa fa-magic" aria-hidden="true" /> AI Provider
             </Button>
             <Button
+              color={activeTab === 'kb' ? 'primary' : 'secondary'}
+              onClick={() => setSelectedTab('kb')}
+            >
+              <i className="fa fa-book" aria-hidden="true" /> Domain Knowledge
+              Base
+            </Button>
+            <Button
               color={activeTab === 'mcp' ? 'primary' : 'secondary'}
-              onClick={() => setActiveTab('mcp')}
+              onClick={() => setSelectedTab('mcp')}
             >
               <i className="fa fa-plug" aria-hidden="true" /> MCP Server
               (Read-Only)
@@ -286,157 +485,422 @@ export const AiSettingsModal = ({
           <>
             <Alert color="info" className="py-2 px-3 small mb-3">
               <i className="fa fa-shield" aria-hidden="true" />{' '}
-              <strong>Privacy-by-Design:</strong> Only schema metadata (class
-              &amp; property names/types) is sent when generating queries. Your
-              row data never leaves your device.
+              <strong>Privacy-by-Design:</strong> Cloud providers only receive
+              schema metadata &amp; domain notes (never row data). Local Ollama
+              stays 100% offline on your Mac.
             </Alert>
 
-        <FormGroup>
-          <Label for="ai-provider-select">AI Provider</Label>
-          <Input
-            id="ai-provider-select"
-            type="select"
-            bsSize="sm"
-            value={form.provider}
-            onChange={(e) => handleProviderChange(e.target.value as AiProvider)}
-          >
-            {AI_PROVIDERS.map((p) => (
-              <option key={p} value={p}>
-                {AI_PROVIDER_LABELS[p]}
-              </option>
-            ))}
-          </Input>
-        </FormGroup>
-
-        {form.provider === 'ollama' && (
-          <FormGroup>
-            <Label for="ai-ollama-url">Ollama Endpoint URL</Label>
-            <InputGroup size="sm">
+            <FormGroup>
+              <Label for="ai-provider-select">AI Provider</Label>
               <Input
-                id="ai-ollama-url"
-                value={form.ollamaUrl}
+                id="ai-provider-select"
+                type="select"
+                bsSize="sm"
+                value={form.provider}
                 onChange={(e) =>
-                  setForm((prev) => ({ ...prev, ollamaUrl: e.target.value }))
+                  handleProviderChange(e.target.value as AiProvider)
                 }
-                placeholder="http://127.0.0.1:11434"
-              />
-              <Button
-                color="secondary"
-                onClick={handleScanOllama}
-                disabled={isScanningOllama}
               >
-                <i className="fa fa-refresh" aria-hidden="true" />{' '}
-                {isScanningOllama ? 'Scanning...' : 'Scan Models'}
-              </Button>
-            </InputGroup>
-          </FormGroup>
-        )}
+                {AI_PROVIDERS.map((p) => (
+                  <option key={p} value={p}>
+                    {AI_PROVIDER_LABELS[p]}
+                  </option>
+                ))}
+              </Input>
+            </FormGroup>
 
-        {form.provider === 'openai' && (
-          <FormGroup>
-            <Label for="ai-openai-url">Base URL (OpenAI or LM Studio)</Label>
-            <Input
-              id="ai-openai-url"
-              bsSize="sm"
-              value={form.openaiBaseUrl}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, openaiBaseUrl: e.target.value }))
-              }
-              placeholder="https://api.openai.com/v1 or http://127.0.0.1:1234/v1"
-            />
-          </FormGroup>
-        )}
+            {form.provider === 'ollama' && (
+              <FormGroup>
+                <Label for="ai-ollama-url">Ollama Endpoint URL</Label>
+                <InputGroup size="sm">
+                  <Input
+                    id="ai-ollama-url"
+                    value={form.ollamaUrl}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        ollamaUrl: e.target.value
+                      }))
+                    }
+                    placeholder="http://127.0.0.1:11434"
+                  />
+                  <Button
+                    color="secondary"
+                    onClick={handleScanOllama}
+                    disabled={isScanningOllama}
+                  >
+                    <i className="fa fa-refresh" aria-hidden="true" />{' '}
+                    {isScanningOllama ? 'Scanning...' : 'Scan Models'}
+                  </Button>
+                </InputGroup>
+              </FormGroup>
+            )}
 
-        <FormGroup>
-          <Label for="ai-model-input">Model</Label>
-          <Input
-            id="ai-model-input"
-            bsSize="sm"
-            value={form.model}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, model: e.target.value }))
-            }
-            placeholder={DEFAULT_AI_MODELS[form.provider]}
-          />
-          <div className="d-flex flex-wrap gap-1 mt-2">
-            {suggestedModels.slice(0, 6).map((m) => (
-              <Badge
-                key={m}
-                color={form.model === m ? 'primary' : 'secondary'}
-                pill
-                style={{ cursor: 'pointer', marginRight: 4, marginBottom: 4 }}
-                onClick={() => setForm((prev) => ({ ...prev, model: m }))}
-              >
-                {m}
-              </Badge>
-            ))}
-          </div>
-        </FormGroup>
-
-        {form.provider !== 'ollama' && (
-          <FormGroup>
-            <Label for="ai-api-key">
-              API Key{' '}
-              <Badge color={encryptedSupported ? 'success' : 'secondary'}>
-                {encryptedSupported ? 'Keychain Encrypted' : 'Local Storage'}
-              </Badge>
-            </Label>
-            <InputGroup size="sm">
-              <Input
-                id="ai-api-key"
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={
-                  form.provider === 'openai'
-                    ? 'sk-... (optional for local LM Studio)'
-                    : 'Paste your API key...'
-                }
-              />
-              <Button
-                color="secondary"
-                onClick={() => setShowKey((prev) => !prev)}
-                title={showKey ? 'Hide key' : 'Show key'}
-              >
-                <i
-                  className={showKey ? 'fa fa-eye-slash' : 'fa fa-eye'}
-                  aria-hidden="true"
+            {form.provider === 'openai' && (
+              <FormGroup>
+                <Label for="ai-openai-url">
+                  Base URL (OpenAI or LM Studio)
+                </Label>
+                <Input
+                  id="ai-openai-url"
+                  bsSize="sm"
+                  value={form.openaiBaseUrl}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      openaiBaseUrl: e.target.value
+                    }))
+                  }
+                  placeholder="https://api.openai.com/v1 or http://127.0.0.1:1234/v1"
                 />
-              </Button>
-            </InputGroup>
-          </FormGroup>
-        )}
+              </FormGroup>
+            )}
 
-        <FormGroup className="mb-2">
-          <Label for="ai-timeout-select">Request Timeout</Label>
-          <Input
-            id="ai-timeout-select"
-            type="select"
-            bsSize="sm"
-            value={form.timeoutMs}
-            onChange={(e) =>
-              setForm((prev) => ({
-                ...prev,
-                timeoutMs: Number(e.target.value)
-              }))
-            }
-          >
-            <option value={10000}>10 seconds</option>
-            <option value={20000}>20 seconds (Default)</option>
-            <option value={30000}>30 seconds</option>
-            <option value={60000}>60 seconds</option>
-          </Input>
-        </FormGroup>
+            <FormGroup>
+              <Label for="ai-model-input">Model</Label>
+              <Input
+                id="ai-model-input"
+                bsSize="sm"
+                value={form.model}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, model: e.target.value }))
+                }
+                placeholder={DEFAULT_AI_MODELS[form.provider]}
+              />
+              <div className="d-flex flex-wrap gap-1 mt-2">
+                {suggestedModels.slice(0, 6).map((m) => (
+                  <Badge
+                    key={m}
+                    color={form.model === m ? 'primary' : 'secondary'}
+                    pill
+                    style={{
+                      cursor: 'pointer',
+                      marginRight: 4,
+                      marginBottom: 4
+                    }}
+                    onClick={() => setForm((prev) => ({ ...prev, model: m }))}
+                  >
+                    {m}
+                  </Badge>
+                ))}
+              </div>
+            </FormGroup>
 
-        {testResult && (
-          <Alert
-            color={testResult.ok ? 'success' : 'danger'}
-            className="py-2 px-3 small mt-3 mb-0"
-          >
-            {testResult.message}
-          </Alert>
-        )}
+            {form.provider === 'ollama' && (
+              <FormGroup>
+                <Label for="ai-ollama-num-ctx">
+                  Ollama Context Window (<code>num_ctx</code>)
+                </Label>
+                <Input
+                  id="ai-ollama-num-ctx"
+                  type="select"
+                  bsSize="sm"
+                  value={form.ollamaNumCtx}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      ollamaNumCtx: Number(e.target.value)
+                    }))
+                  }
+                >
+                  <option value={4096}>4,096 tokens (Low RAM)</option>
+                  <option value={8192}>
+                    8,192 tokens (Recommended for KB + RQL)
+                  </option>
+                  <option value={16384}>16,384 tokens (Large Schemas)</option>
+                </Input>
+              </FormGroup>
+            )}
+
+            {form.provider !== 'ollama' && (
+              <FormGroup>
+                <Label for="ai-api-key">
+                  API Key{' '}
+                  <Badge color={encryptedSupported ? 'success' : 'secondary'}>
+                    {encryptedSupported ? 'Keychain Encrypted' : 'Local Storage'}
+                  </Badge>
+                </Label>
+                <InputGroup size="sm">
+                  <Input
+                    id="ai-api-key"
+                    type={showKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={
+                      form.provider === 'openai'
+                        ? 'sk-... (optional for local LM Studio)'
+                        : 'Paste your API key...'
+                    }
+                  />
+                  <Button
+                    color="secondary"
+                    onClick={() => setShowKey((prev) => !prev)}
+                    title={showKey ? 'Hide key' : 'Show key'}
+                  >
+                    <i
+                      className={showKey ? 'fa fa-eye-slash' : 'fa fa-eye'}
+                      aria-hidden="true"
+                    />
+                  </Button>
+                </InputGroup>
+              </FormGroup>
+            )}
+
+            <FormGroup check className="mb-2">
+              <Label check className="small">
+                <Input
+                  type="checkbox"
+                  checked={form.enableSelfCorrection}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      enableSelfCorrection: e.target.checked
+                    }))
+                  }
+                />{' '}
+                <strong>RQL Self-Correction Loop:</strong> Test generated RQL
+                on Realm engine &amp; auto-fix syntax errors (up to 2 retries)
+              </Label>
+            </FormGroup>
+
+            <FormGroup check className="mb-3">
+              <Label check className="small">
+                <Input
+                  type="checkbox"
+                  checked={form.enableLocalDataHints}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      enableLocalDataHints: e.target.checked
+                    }))
+                  }
+                />{' '}
+                <strong>On-Device Enum Value Hints (Local AI only):</strong>{' '}
+                Sample up to 6 non-PII low-cardinality values so local Ollama
+                knows exact stored codes (never sent to cloud APIs)
+              </Label>
+            </FormGroup>
+
+            <FormGroup className="mb-2">
+              <Label for="ai-timeout-select">Request Timeout</Label>
+              <Input
+                id="ai-timeout-select"
+                type="select"
+                bsSize="sm"
+                value={form.timeoutMs}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    timeoutMs: Number(e.target.value)
+                  }))
+                }
+              >
+                <option value={10000}>10 seconds</option>
+                <option value={20000}>20 seconds</option>
+                <option value={30000}>30 seconds (Default)</option>
+                <option value={60000}>60 seconds</option>
+                <option value={120000}>120 seconds (Large Local Models)</option>
+              </Input>
+            </FormGroup>
+
+            {testResult && (
+              <Alert
+                color={testResult.ok ? 'success' : 'danger'}
+                className="py-2 px-3 small mt-3 mb-0"
+              >
+                {testResult.message}
+              </Alert>
+            )}
           </>
+        ) : activeTab === 'kb' ? (
+          <div>
+            {!kb ? (
+              <Alert color="warning" className="py-2 px-3 small mb-0">
+                Open a <code>.realm</code> database first to configure its
+                Domain Knowledge Base.
+              </Alert>
+            ) : (
+              <>
+                <Alert color="info" className="py-2 px-3 small mb-3">
+                  <i className="fa fa-book" aria-hidden="true" />{' '}
+                  <strong>Shared Domain Knowledge Base:</strong> Tied to schema
+                  fingerprint <code>{kb.schemaHash}</code> (
+                  <code>{kb.realmName}</code>) — persists across Simulator UUID
+                  and Android temp pulls, and automatically enriches{' '}
+                  <strong>Local AI</strong> and <strong>MCP</strong> (
+                  <code>get_class_schema</code>).
+                </Alert>
+
+                <FormGroup className="mb-2">
+                  <Label for="kb-project-notes" className="small font-weight-bold">
+                    Project &amp; Business Rules Notes (Thai / English)
+                  </Label>
+                  <Input
+                    id="kb-project-notes"
+                    type="textarea"
+                    rows={3}
+                    bsSize="sm"
+                    value={kb.projectNotes}
+                    onChange={(e) =>
+                      setKb((prev) =>
+                        prev ? { ...prev, projectNotes: e.target.value } : prev
+                      )
+                    }
+                    placeholder="e.g. status: 1=Active, 2=Suspended, 9=Cancelled | เวลาที่เก็บใน DB เป็น UTC | ลูกค้า VIP คือ tier == 'GOLD'"
+                  />
+                </FormGroup>
+
+                <FormGroup className="mb-3">
+                  <Label for="kb-source-dir" className="small font-weight-bold">
+                    App Source Folder (Optional Local Code/Enum RAG — Swift,
+                    Kotlin, Dart, TS, Markdown)
+                  </Label>
+                  <InputGroup size="sm">
+                    <Input
+                      id="kb-source-dir"
+                      value={kb.sourceDir || ''}
+                      onChange={(e) =>
+                        setKb((prev) =>
+                          prev ? { ...prev, sourceDir: e.target.value } : prev
+                        )
+                      }
+                      placeholder="/path/to/your/mobile-app-repo"
+                    />
+                    <Button color="secondary" onClick={handleBrowseSourceDir}>
+                      Browse...
+                    </Button>
+                    <Button color="info" onClick={handleIndexSourceDir}>
+                      Index Code
+                    </Button>
+                  </InputGroup>
+                  <div className="small text-muted mt-1">
+                    Indexed symbols: <strong>{kb.indexedSymbols.length}</strong>
+                    {kb.lastIndexedAt
+                      ? ` (last indexed ${new Date(kb.lastIndexedAt).toLocaleString()})`
+                      : ''}
+                  </div>
+                </FormGroup>
+
+                {nonSystemClasses.length > 0 && (
+                  <div className="mb-3 p-2 border rounded">
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <strong className="small">
+                        Class &amp; Field Descriptions (mapped to AI &amp; MCP)
+                      </strong>
+                      <Input
+                        type="select"
+                        bsSize="sm"
+                        style={{ maxWidth: 240 }}
+                        value={kbClassName}
+                        onChange={(e) => setKbClassName(e.target.value)}
+                      >
+                        {nonSystemClasses.map((c) => (
+                          <option key={c.name} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </Input>
+                    </div>
+
+                    {kbClassName && (
+                      <>
+                        <Input
+                          bsSize="sm"
+                          className="mb-2"
+                          value={kb.classes[kbClassName]?.description || ''}
+                          onChange={(e) =>
+                            updateKbClassDescription(
+                              kbClassName,
+                              e.target.value
+                            )
+                          }
+                          placeholder={`Describe ${kbClassName} table purpose...`}
+                        />
+                        <div
+                          style={{
+                            maxHeight: 165,
+                            overflowY: 'auto',
+                            paddingRight: 4
+                          }}
+                        >
+                          {selectedProps.map((propName) => (
+                            <div
+                              key={propName}
+                              className="d-flex align-items-center mb-1"
+                            >
+                              <code
+                                className="small text-truncate mr-2"
+                                style={{ width: 150, flexShrink: 0 }}
+                                title={propName}
+                              >
+                                {propName}
+                              </code>
+                              <Input
+                                bsSize="sm"
+                                value={
+                                  kb.classes[kbClassName]?.properties?.[
+                                    propName
+                                  ] || ''
+                                }
+                                onChange={(e) =>
+                                  updateKbPropertyDescription(
+                                    kbClassName,
+                                    propName,
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Field meaning / enum codes..."
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="d-flex justify-content-between align-items-center small text-muted">
+                  <span>
+                    Learned Few-Shot RQL Examples:{' '}
+                    <strong>{kb.customExamples.length}</strong>
+                  </span>
+                  <div>
+                    {kb.customExamples.length > 0 && (
+                      <Button
+                        size="sm"
+                        color="link"
+                        className="text-danger py-0 mr-2"
+                        onClick={() =>
+                          setKb((prev) =>
+                            prev ? { ...prev, customExamples: [] } : prev
+                          )
+                        }
+                      >
+                        Clear Examples
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      color="info"
+                      outline
+                      onClick={() => handleSaveKbOnly(false)}
+                    >
+                      Apply Notes Now
+                    </Button>
+                  </div>
+                </div>
+
+                {kbStatus && (
+                  <Alert
+                    color={kbStatus.ok ? 'success' : 'danger'}
+                    className="py-2 px-3 small mt-2 mb-0"
+                  >
+                    {kbStatus.message}
+                  </Alert>
+                )}
+              </>
+            )}
+          </div>
         ) : (
           <div>
             <Alert color="info" className="py-2 px-3 small mb-3">
@@ -451,11 +915,14 @@ export const AiSettingsModal = ({
                 'Omit path to use the most recently opened Realm.'
               )}{' '}
               {hasAutoUnlockKey ? (
-                <span>Unlocked/Vault keys are reused locally without putting them in chat.</span>
+                <span>
+                  Unlocked/Vault keys are reused locally without putting them in
+                  chat.
+                </span>
               ) : (
                 <span>
-                  For encrypted Realms, unlock them here or paste the 128-hex key into{' '}
-                  <code>REALM_ENCRYPTION_KEY</code>.
+                  For encrypted Realms, unlock them here or paste the 128-hex
+                  key into <code>REALM_ENCRYPTION_KEY</code>.
                 </span>
               )}
             </Alert>
@@ -500,8 +967,9 @@ export const AiSettingsModal = ({
                   checked={includeSavedKeyInEnv}
                   onChange={(e) => setIncludeSavedKeyInEnv(e.target.checked)}
                 />{' '}
-                Pre-fill active / Vault key into <code>env.REALM_ENCRYPTION_KEY</code>{' '}
-                (leave unchecked if committing <code>.vscode/mcp.json</code> to Git)
+                Pre-fill active / Vault key into{' '}
+                <code>env.REALM_ENCRYPTION_KEY</code> (leave unchecked if
+                committing <code>.vscode/mcp.json</code> to Git)
               </Label>
             </FormGroup>
 
@@ -524,7 +992,9 @@ export const AiSettingsModal = ({
               <code>count_realm_objects</code>,{' '}
               <code>list_simulator_realms</code>,{' '}
               <code>list_android_realms</code>,{' '}
-              <code>pull_android_realm</code>, <code>list_recent_realms</code>.
+              <code>pull_android_realm</code>, <code>list_recent_realms</code>.{' '}
+              Schema tools automatically include your Domain Knowledge Base{' '}
+              <code>description</code> annotations.
             </div>
           </div>
         )}
@@ -547,6 +1017,20 @@ export const AiSettingsModal = ({
             </Button>
             <Button size="sm" color="primary" onClick={handleSave}>
               Save Settings
+            </Button>
+          </>
+        ) : activeTab === 'kb' ? (
+          <>
+            <Button size="sm" color="secondary" onClick={toggle}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              color="primary"
+              disabled={!kb}
+              onClick={() => handleSaveKbOnly(true)}
+            >
+              Save Knowledge Base
             </Button>
           </>
         ) : (

@@ -25,7 +25,9 @@ import { serializeRealmValue } from '../utils/realm-serialize';
 import { getAppUserDataCandidates } from '../utils/user-data-path';
 
 import { listActiveRealmSessions } from './active-realms';
+import { findExistingKnowledgeBase } from './ai-knowledge-base';
 import { getCandidateKeysForPath } from './encryption-keys';
+import { diagnoseRqlError } from './rql-reference';
 
 export const MAX_MCP_QUERY_LIMIT = 50;
 const HEX_128_REGEX = /^[a-fA-F0-9]{128}$/;
@@ -44,6 +46,7 @@ export interface IClassOverviewSummary {
   primaryKey: string | null;
   propertyCount: number;
   rowCount: number | null;
+  description?: string;
 }
 
 export type RealmTargetSource = 'explicit-path' | 'open-window' | 'recent-file';
@@ -54,6 +57,7 @@ export interface IRealmOverviewResult {
   activeClassName: string | null;
   sizeBytes: number;
   schemaVersion: number;
+  knowledgeBaseNotes?: string;
   classes: IClassOverviewSummary[];
 }
 
@@ -64,6 +68,7 @@ export interface IPropertyDetail {
   optional: boolean;
   indexed: boolean;
   isPrimaryKey: boolean;
+  description?: string;
 }
 
 export interface IClassSchemaDetail {
@@ -71,6 +76,7 @@ export interface IClassSchemaDetail {
   embedded: boolean;
   asymmetric: boolean;
   primaryKey: string | null;
+  description?: string;
   properties: IPropertyDetail[];
 }
 
@@ -369,19 +375,25 @@ export function inspectRealmOverview(params: {
     params.path,
     params.encryptionKeyHex,
     (realm, target, sizeBytes) => {
+      const kb = findExistingKnowledgeBase(target.path, realm.schema);
+      const projectNotes = kb?.projectNotes?.trim() || undefined;
       const classes: IClassOverviewSummary[] = realm.schema
         .filter((s) => !s.name.startsWith('__'))
-        .map((schema) => ({
-          name: schema.name,
-          embedded: !!schema.embedded,
-          asymmetric: !!schema.asymmetric,
-          primaryKey: schema.primaryKey || null,
-          propertyCount: Object.keys(schema.properties).length,
-          rowCount:
-            schema.embedded || schema.asymmetric
-              ? null
-              : realm.objects(schema.name).length
-        }));
+        .map((schema) => {
+          const desc = kb?.classes?.[schema.name]?.description?.trim();
+          return {
+            name: schema.name,
+            embedded: !!schema.embedded,
+            asymmetric: !!schema.asymmetric,
+            primaryKey: schema.primaryKey || null,
+            propertyCount: Object.keys(schema.properties).length,
+            rowCount:
+              schema.embedded || schema.asymmetric
+                ? null
+                : realm.objects(schema.name).length,
+            ...(desc ? { description: desc } : {})
+          };
+        });
 
       return {
         path: target.path,
@@ -389,6 +401,7 @@ export function inspectRealmOverview(params: {
         activeClassName: target.activeClassName || null,
         sizeBytes,
         schemaVersion: realm.schemaVersion,
+        ...(projectNotes ? { knowledgeBaseNotes: projectNotes } : {}),
         classes
       };
     }
@@ -406,6 +419,7 @@ export function getRealmClassSchemas(params: {
   classes: IClassSchemaDetail[];
 } {
   return withOpenedRealm(params.path, params.encryptionKeyHex, (realm, target) => {
+    const kb = findExistingKnowledgeBase(target.path, realm.schema);
     const schemas = realm.schema.filter((s) => {
       if (s.name.startsWith('__')) {
         return false;
@@ -427,26 +441,33 @@ export function getRealmClassSchemas(params: {
       path: target.path,
       source: target.source,
       activeClassName: target.activeClassName || null,
-      classes: schemas.map((schema) => ({
-        name: schema.name,
-        embedded: !!schema.embedded,
-        asymmetric: !!schema.asymmetric,
-        primaryKey: schema.primaryKey || null,
-        properties: Object.entries(schema.properties).map(([propName, raw]) => {
-          const prop =
-            typeof raw === 'string'
-              ? ({ type: raw } as Realm.ObjectSchemaProperty)
-              : (raw as Realm.ObjectSchemaProperty);
-          return {
-            name: propName,
-            type: prop.type,
-            objectType: prop.objectType || null,
-            optional: !!prop.optional,
-            indexed: !!prop.indexed,
-            isPrimaryKey: schema.primaryKey === propName
-          };
-        })
-      }))
+      classes: schemas.map((schema) => {
+        const classKb = kb?.classes?.[schema.name];
+        const classDesc = classKb?.description?.trim();
+        return {
+          name: schema.name,
+          embedded: !!schema.embedded,
+          asymmetric: !!schema.asymmetric,
+          primaryKey: schema.primaryKey || null,
+          ...(classDesc ? { description: classDesc } : {}),
+          properties: Object.entries(schema.properties).map(([propName, raw]) => {
+            const prop =
+              typeof raw === 'string'
+                ? ({ type: raw } as Realm.ObjectSchemaProperty)
+                : (raw as Realm.ObjectSchemaProperty);
+            const propDesc = classKb?.properties?.[propName]?.trim();
+            return {
+              name: propName,
+              type: prop.type,
+              objectType: prop.objectType || null,
+              optional: !!prop.optional,
+              indexed: !!prop.indexed,
+              isPrimaryKey: schema.primaryKey === propName,
+              ...(propDesc ? { description: propDesc } : {})
+            };
+          })
+        };
+      })
     };
   });
 }
@@ -479,7 +500,17 @@ function getFilteredCollection(
 
   const trimmedQuery = query?.trim();
   if (trimmedQuery) {
-    results = results.filtered(trimmedQuery);
+    try {
+      results = results.filtered(trimmedQuery);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const hint = diagnoseRqlError(
+        trimmedQuery,
+        errMsg,
+        Object.keys(schema.properties)
+      );
+      throw new Error(hint ? `${errMsg} (Hint: ${hint})` : errMsg);
+    }
   }
   const trimmedSort = sortBy?.trim();
   if (trimmedSort) {

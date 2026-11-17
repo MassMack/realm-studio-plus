@@ -66,6 +66,9 @@ export interface IAiSettings {
   ollamaUrl: string;
   openaiBaseUrl: string;
   timeoutMs: number;
+  ollamaNumCtx: number;
+  enableSelfCorrection: boolean;
+  enableLocalDataHints: boolean;
 }
 
 export const DEFAULT_AI_SETTINGS: IAiSettings = {
@@ -73,7 +76,10 @@ export const DEFAULT_AI_SETTINGS: IAiSettings = {
   model: DEFAULT_AI_MODELS.ollama,
   ollamaUrl: 'http://127.0.0.1:11434',
   openaiBaseUrl: 'https://api.openai.com/v1',
-  timeoutMs: 20000
+  timeoutMs: 30000,
+  ollamaNumCtx: 8192,
+  enableSelfCorrection: true,
+  enableLocalDataHints: true
 };
 
 /** All valid theme modes, in the order they should be presented to the user */
@@ -137,10 +143,34 @@ function normalizeAiSettings(raw: unknown): IAiSettings {
     typeof obj.timeoutMs === 'number' &&
     Number.isFinite(obj.timeoutMs) &&
     obj.timeoutMs >= 3000 &&
-    obj.timeoutMs <= 120000
+    obj.timeoutMs <= 180000
       ? obj.timeoutMs
       : DEFAULT_AI_SETTINGS.timeoutMs;
-  return { provider, model, ollamaUrl, openaiBaseUrl, timeoutMs };
+  const ollamaNumCtx =
+    typeof obj.ollamaNumCtx === 'number' &&
+    Number.isFinite(obj.ollamaNumCtx) &&
+    obj.ollamaNumCtx >= 2048 &&
+    obj.ollamaNumCtx <= 32768
+      ? Math.round(obj.ollamaNumCtx)
+      : DEFAULT_AI_SETTINGS.ollamaNumCtx;
+  const enableSelfCorrection =
+    typeof obj.enableSelfCorrection === 'boolean'
+      ? obj.enableSelfCorrection
+      : DEFAULT_AI_SETTINGS.enableSelfCorrection;
+  const enableLocalDataHints =
+    typeof obj.enableLocalDataHints === 'boolean'
+      ? obj.enableLocalDataHints
+      : DEFAULT_AI_SETTINGS.enableLocalDataHints;
+  return {
+    provider,
+    model,
+    ollamaUrl,
+    openaiBaseUrl,
+    timeoutMs,
+    ollamaNumCtx,
+    enableSelfCorrection,
+    enableLocalDataHints
+  };
 }
 
 /**

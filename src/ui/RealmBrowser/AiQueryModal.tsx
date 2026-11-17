@@ -31,7 +31,16 @@ import {
 } from 'reactstrap';
 import Realm from 'realm';
 
-import { generateRealmQuery } from '../../services/ai';
+import {
+  generateRealmQuery,
+  IGeneratedRealmQuery,
+  isLocalAiEndpoint
+} from '../../services/ai';
+import {
+  loadKnowledgeBaseForRealm,
+  recordVerifiedQueryExample
+} from '../../services/ai-knowledge-base';
+import { validateRqlAgainstRealm } from '../../services/rql-reference';
 import { AI_PROVIDER_LABELS, IAiSettings, settings } from '../../services/settings';
 
 export interface IAiQueryModalProps {
@@ -40,7 +49,9 @@ export interface IAiQueryModalProps {
   currentQuery: string;
   isOpen: boolean;
   onApplyQuery: (query: string) => void;
+  onOpenKnowledgeBase?: () => void;
   onOpenSettings: () => void;
+  realm?: Realm;
   toggle: () => void;
 }
 
@@ -81,7 +92,7 @@ function buildSuggestedPrompts(
     suggestions.push(`เฉพาะที่ ${boolProp.name} เป็น true`);
   }
   if (dateProp) {
-    suggestions.push(`เรียงตาม ${dateProp.name} ล่าสุด 50 แถวแรก`);
+    suggestions.push(`เรียงตาม ${dateProp.name} ล่าสุด 20 แถวแรก`);
   }
   if (suggestions.length === 0) {
     suggestions.push(`แสดง ${activeClassName} 20 รายการแรก`);
@@ -95,15 +106,21 @@ export const AiQueryModal = ({
   currentQuery,
   isOpen,
   onApplyQuery,
+  onOpenKnowledgeBase,
   onOpenSettings,
+  realm,
   toggle
 }: IAiQueryModalProps) => {
   const [prompt, setPrompt] = useState('');
   const [generatedQuery, setGeneratedQuery] = useState('');
   const [explanation, setExplanation] = useState('');
+  const [generationMeta, setGenerationMeta] =
+    useState<IGeneratedRealmQuery | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState('Generating RQL...');
   const [copied, setCopied] = useState(false);
+  const [kbBadgeText, setKbBadgeText] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<IAiSettings>(() =>
     settings.getAiSettings()
   );
@@ -118,10 +135,39 @@ export const AiQueryModal = ({
     return unsubscribe;
   }, []);
 
+  const refreshKbStatus = () => {
+    if (!realm?.path) {
+      setKbBadgeText(null);
+      return;
+    }
+    const kb = loadKnowledgeBaseForRealm(realm.path, classes);
+    const hasNotes =
+      kb.projectNotes.trim().length > 0 ||
+      Object.keys(kb.classes || {}).length > 0;
+    const hasCode = kb.indexedSymbols.length > 0;
+    const hasEx = kb.customExamples.length > 0;
+    if (!hasNotes && !hasCode && !hasEx) {
+      setKbBadgeText(null);
+      return;
+    }
+    const parts: string[] = [];
+    if (hasNotes) {
+      parts.push('Glossary');
+    }
+    if (hasCode) {
+      parts.push(`${kb.indexedSymbols.length} Symbols`);
+    }
+    if (hasEx) {
+      parts.push(`${kb.customExamples.length} Examples`);
+    }
+    setKbBadgeText(`KB: ${parts.join(' · ')}`);
+  };
+
   const handleOpened = () => {
     setAiSettings(settings.getAiSettings());
     setError(null);
     setCopied(false);
+    refreshKbStatus();
     if (currentQuery && !generatedQuery) {
       setGeneratedQuery(currentQuery);
     }
@@ -140,6 +186,15 @@ export const AiQueryModal = ({
     () => buildSuggestedPrompts(classes, activeClassName),
     [classes, activeClassName]
   );
+
+  // Live validation whenever the user edits or AI produces a candidate RQL string
+  const liveValidation = useMemo(() => {
+    const trimmed = generatedQuery.trim();
+    if (!trimmed || !realm || !activeClassName) {
+      return null;
+    }
+    return validateRqlAgainstRealm(realm, activeClassName, trimmed);
+  }, [generatedQuery, realm, activeClassName]);
 
   const handleCancelRequest = () => {
     if (abortRef.current) {
@@ -161,6 +216,7 @@ export const AiQueryModal = ({
     abortRef.current = controller;
 
     setIsLoading(true);
+    setLoadingStatus('Generating RQL...');
     setError(null);
     setCopied(false);
 
@@ -169,11 +225,19 @@ export const AiQueryModal = ({
         prompt: text,
         classes,
         activeClassName,
-        signal: controller.signal
+        realm,
+        signal: controller.signal,
+        onProgress: (status) => {
+          if (!controller.signal.aborted) {
+            setLoadingStatus(status);
+          }
+        }
       });
       if (!controller.signal.aborted) {
         setGeneratedQuery(result.query);
         setExplanation(result.explanation);
+        setGenerationMeta(result);
+        refreshKbStatus();
       }
     } catch (err) {
       if (controller.signal.aborted) {
@@ -193,6 +257,24 @@ export const AiQueryModal = ({
     if (!trimmed) {
       return;
     }
+    if (
+      realm?.path &&
+      activeClassName &&
+      prompt.trim() &&
+      liveValidation?.valid
+    ) {
+      try {
+        recordVerifiedQueryExample({
+          realmPath: realm.path,
+          classes,
+          className: activeClassName,
+          naturalLanguage: prompt.trim(),
+          rql: trimmed
+        });
+      } catch {
+        // non-fatal KB history write error
+      }
+    }
     onApplyQuery(trimmed);
     toggle();
   };
@@ -205,6 +287,8 @@ export const AiQueryModal = ({
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
+
+  const isLocal = isLocalAiEndpoint(aiSettings);
 
   return (
     <Modal
@@ -224,20 +308,44 @@ export const AiQueryModal = ({
         ) : null}
       </ModalHeader>
       <ModalBody>
-        <div className="d-flex justify-content-between align-items-center mb-3">
+        <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap">
           <div className="small text-muted">
-            Provider:{' '}
             <Badge color="secondary">
               {AI_PROVIDER_LABELS[aiSettings.provider]} · {aiSettings.model}
             </Badge>{' '}
+            {aiSettings.enableSelfCorrection && realm ? (
+              <Badge color="info" className="ml-1">
+                RQL Self-Check
+              </Badge>
+            ) : null}
+            {kbBadgeText ? (
+              <Badge color="success" className="ml-1">
+                {kbBadgeText}
+              </Badge>
+            ) : null}
             <span className="ml-2">
-              <i className="fa fa-lock" aria-hidden="true" /> Schema only (no
-              row data sent)
+              <i className="fa fa-lock" aria-hidden="true" />{' '}
+              {isLocal && aiSettings.enableLocalDataHints
+                ? 'On-device only (schema + safe enum hints)'
+                : 'Schema only (no row data sent)'}
             </span>
           </div>
-          <Button size="sm" color="secondary" onClick={onOpenSettings}>
-            <i className="fa fa-cog" aria-hidden="true" /> AI Settings
-          </Button>
+          <div className="d-flex align-items-center mt-1 mt-sm-0">
+            {onOpenKnowledgeBase ? (
+              <Button
+                size="sm"
+                color="info"
+                outline
+                className="mr-2"
+                onClick={onOpenKnowledgeBase}
+              >
+                <i className="fa fa-book" aria-hidden="true" /> Domain KB
+              </Button>
+            ) : null}
+            <Button size="sm" color="secondary" onClick={onOpenSettings}>
+              <i className="fa fa-cog" aria-hidden="true" /> AI Settings
+            </Button>
+          </div>
         </div>
 
         {!activeClassName ? (
@@ -265,7 +373,7 @@ export const AiQueryModal = ({
                     void handleGenerate();
                   }
                 }}
-                placeholder="e.g. หาผู้ใช้ที่อายุมากกว่า 25 และ status เป็น active เรียงจากล่าสุด"
+                placeholder="e.g. หาผู้ใช้ที่ status active ใน 7 วันล่าสุด เรียงจากล่าสุด 20 รายการ"
                 disabled={isLoading}
               />
               <div className="d-flex flex-wrap align-items-center mt-2">
@@ -299,7 +407,7 @@ export const AiQueryModal = ({
                 disabled={isLoading || !prompt.trim()}
               >
                 <i className="fa fa-magic" aria-hidden="true" />{' '}
-                {isLoading ? 'Generating RQL...' : 'Generate Realm Query'}
+                {isLoading ? loadingStatus : 'Generate Realm Query'}
               </Button>
               {isLoading && (
                 <Button
@@ -334,9 +442,26 @@ export const AiQueryModal = ({
 
             {(generatedQuery || explanation) && (
               <FormGroup className="mb-0">
-                <Label for="ai-generated-rql">
-                  Generated Realm Query (editable before applying)
-                </Label>
+                <div className="d-flex justify-content-between align-items-center mb-1">
+                  <Label for="ai-generated-rql" className="mb-0">
+                    Generated Realm Query (editable before applying)
+                  </Label>
+                  {liveValidation && (
+                    <Badge
+                      color={liveValidation.valid ? 'success' : 'warning'}
+                      className="ml-2"
+                    >
+                      {liveValidation.valid
+                        ? `Verified RQL · ${liveValidation.matchedCount?.toLocaleString()} / ${liveValidation.totalInClass?.toLocaleString()} rows${
+                            generationMeta?.attempts &&
+                            generationMeta.attempts > 1
+                              ? ` (auto-fixed #${generationMeta.attempts})`
+                              : ''
+                          }`
+                        : 'RQL Syntax Issue'}
+                    </Badge>
+                  )}
+                </div>
                 <Input
                   id="ai-generated-rql"
                   bsSize="sm"
@@ -350,6 +475,17 @@ export const AiQueryModal = ({
                   }}
                   style={{ fontFamily: 'monospace' }}
                 />
+                {liveValidation && !liveValidation.valid && (
+                  <Alert color="warning" className="py-2 px-3 small mt-2 mb-0">
+                    <strong>Realm Engine Rejected Query:</strong>{' '}
+                    {liveValidation.errorMessage}
+                    {liveValidation.correctionHint ? (
+                      <div className="mt-1">
+                        <strong>Hint:</strong> {liveValidation.correctionHint}
+                      </div>
+                    ) : null}
+                  </Alert>
+                )}
                 {explanation && (
                   <div className="small text-muted mt-2">
                     <i className="fa fa-info-circle" aria-hidden="true" />{' '}

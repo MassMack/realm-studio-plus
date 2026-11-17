@@ -26,7 +26,7 @@ export interface ISerializeRealmOptions {
   maskSensitiveFields?: boolean;
 }
 
-function isSensitivePropertyName(name: string): boolean {
+export function isSensitivePropertyName(name: string): boolean {
   const compact = name.replace(/[^a-zA-Z0-9_-]/g, '');
   return (
     SENSITIVE_FIELD_PATTERN.test(compact) ||

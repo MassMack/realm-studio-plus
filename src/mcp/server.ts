@@ -80,7 +80,7 @@ function wrapReadOnly<Args>(
   };
 }
 
-export function createRealmMcpServer(version = '20.2.0'): McpServer {
+export function createRealmMcpServer(version = '20.3.0'): McpServer {
   const server = new McpServer({
     name: 'realm-studio-plus',
     version
@@ -279,7 +279,7 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     {
       title: 'Get Realm Class Schema',
       description:
-        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) for one class or all classes. Defaults to the currently open Realm in Realm Studio Plus when path is omitted.',
+        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) plus Domain Knowledge Base descriptions when available. Defaults to the currently open Realm in Realm Studio Plus when path is omitted.',
       inputSchema: {
         path: z
           .string()
@@ -308,7 +308,7 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
     'query_realm',
     {
       title: 'Query Realm Objects (RQL)',
-      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields masked by default). Omit path/className to query the currently open window & table in Realm Studio Plus.`,
+      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields masked by default). Omit path/className to query the currently open window & table in Realm Studio Plus. Date literals require unquoted UTC YYYY-MM-DD@HH:MM:SS.`,
       inputSchema: {
         path: z
           .string()
@@ -328,7 +328,7 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
           .string()
           .optional()
           .describe(
-            'Optional RQL filter predicate (e.g. "age > 20 AND status == \'active\'"). Omit to return all rows.'
+            'Optional RQL predicate (NOT SQL). Examples: status ==[c] "active", count BETWEEN {1, 10}, createdAt >= 2026-01-01@00:00:00, TRUEPREDICATE SORT(createdAt DESC) LIMIT(20), SUBQUERY(items, $x, $x.price > 0).@count > 0, or ANY tags == "vip" for primitive lists. Omit to return all rows.'
           ),
         sortBy: z
           .string()
@@ -388,7 +388,12 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
           .describe(
             'Realm class name to count. Omit to use the currently active table in Realm Studio Plus.'
           ),
-        query: z.string().optional().describe('Optional RQL filter predicate.'),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            'Optional RQL filter predicate (dates require UTC YYYY-MM-DD@HH:MM:SS; use ANY for primitive lists and SUBQUERY only for object lists).'
+          ),
         encryptionKeyHex: z
           .string()
           .optional()

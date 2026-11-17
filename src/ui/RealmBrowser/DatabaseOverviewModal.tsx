@@ -285,6 +285,7 @@ export const DatabaseOverviewModal = ({
       const report = await analyzeSchemaWithAi({
         classes,
         objectCounts,
+        realmPath: realm.path,
         signal: controller.signal
       });
       if (!controller.signal.aborted) {

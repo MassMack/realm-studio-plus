@@ -52,6 +52,7 @@ import {
   RealmLoadingComponent
 } from '../reusable/RealmLoadingComponent';
 
+import { AiSettingsModalTab } from './AiSettingsModal';
 import { ICommandPaletteAction } from './CommandPaletteModal';
 import { Content, EditMode } from './Content';
 import { IHighlight } from './Content/Table';
@@ -141,6 +142,7 @@ export interface IRealmBrowserState extends IRealmLoadingComponentState {
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
   isAiSettingsOpen: boolean;
+  aiSettingsInitialTab: AiSettingsModalTab;
   isAndroidTracked: boolean;
   isCommandPaletteOpen: boolean;
   isEncryptionDialogVisible: boolean;
@@ -176,6 +178,7 @@ class RealmBrowserContainer
     isAddPropertyOpen: false,
     isAiQueryOpen: false,
     isAiSettingsOpen: false,
+    aiSettingsInitialTab: 'ai',
     isAndroidTracked: false,
     isCommandPaletteOpen: false,
     isEncryptionDialogVisible: false,
@@ -268,6 +271,7 @@ class RealmBrowserContainer
         isAddPropertyOpen={this.state.isAddPropertyOpen}
         isAiQueryOpen={this.state.isAiQueryOpen}
         isAiSettingsOpen={this.state.isAiSettingsOpen}
+        aiSettingsInitialTab={this.state.aiSettingsInitialTab}
         isAndroidTracked={this.state.isAndroidTracked}
         isClassNameAvailable={this.isClassNameAvailable}
         isCommandPaletteOpen={this.state.isCommandPaletteOpen}
@@ -279,6 +283,7 @@ class RealmBrowserContainer
         onAddClass={this.onAddClass}
         onAddProperty={this.onAddProperty}
         onApplyAiQuery={this.onApplyAiQuery}
+        onOpenAiSettingsTab={this.openAiSettingsTab}
         onBack={this.onNavigateBack}
         onBreadcrumbClick={this.onBreadcrumbClick}
         onConfigureAndroidSync={this.onConfigureAndroidSync}
@@ -710,8 +715,16 @@ class RealmBrowserContainer
 
   private toggleAiSettings = () => {
     this.setState((prev) => ({
+      aiSettingsInitialTab: 'ai',
       isAiSettingsOpen: !prev.isAiSettingsOpen
     }));
+  };
+
+  private openAiSettingsTab = (tab: AiSettingsModalTab = 'ai') => {
+    this.setState({
+      aiSettingsInitialTab: tab,
+      isAiSettingsOpen: true
+    });
   };
 
   private onApplyAiQuery = (query: string) => {

@@ -29,7 +29,7 @@ import {
 import { AddClassModal } from './AddClassModal';
 import { AddPropertyModal } from './AddPropertyModal';
 import { AiQueryModal } from './AiQueryModal';
-import { AiSettingsModal } from './AiSettingsModal';
+import { AiSettingsModal, AiSettingsModalTab } from './AiSettingsModal';
 import {
   CommandPaletteModal,
   ICommandPaletteAction
@@ -74,6 +74,7 @@ export interface IRealmBrowserProps {
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
   isAiSettingsOpen: boolean;
+  aiSettingsInitialTab: AiSettingsModalTab;
   isAndroidTracked: boolean;
   isClassNameAvailable: (name: string) => boolean;
   isCommandPaletteOpen: boolean;
@@ -89,6 +90,7 @@ export interface IRealmBrowserProps {
   onAddClass: (schema: Realm.ObjectSchema) => void;
   onAddProperty: (name: string, type: Realm.PropertyType | string) => void;
   onApplyAiQuery: (query: string) => void;
+  onOpenAiSettingsTab: (tab?: AiSettingsModalTab) => void;
   onBack: () => void;
   onBreadcrumbClick: (index: number) => void;
   onConfigureAndroidSync: () => void;
@@ -151,6 +153,7 @@ export const RealmBrowser = ({
   isAddPropertyOpen,
   isAiQueryOpen,
   isAiSettingsOpen,
+  aiSettingsInitialTab,
   isAndroidTracked,
   isClassNameAvailable,
   isCommandPaletteOpen,
@@ -163,6 +166,7 @@ export const RealmBrowser = ({
   onAddClass,
   onAddProperty,
   onApplyAiQuery,
+  onOpenAiSettingsTab,
   onBack,
   onBreadcrumbClick,
   onConfigureAndroidSync,
@@ -194,6 +198,12 @@ export const RealmBrowser = ({
   toggleOverview,
   isEmbeddedType
 }: IRealmBrowserProps) => {
+  const activeClassName = focus
+    ? focus.kind === 'class'
+      ? focus.className
+      : focus.property.objectType
+    : undefined;
+
   return (
     <div className="RealmBrowser">
       <LeftSidebar
@@ -296,23 +306,23 @@ export const RealmBrowser = ({
       />
 
       <AiQueryModal
-        activeClassName={
-          focus
-            ? focus.kind === 'class'
-              ? focus.className
-              : focus.property.objectType
-            : undefined
-        }
+        activeClassName={activeClassName}
         classes={classes}
         currentQuery=""
         isOpen={isAiQueryOpen}
         onApplyQuery={onApplyAiQuery}
-        onOpenSettings={toggleAiSettings}
+        onOpenKnowledgeBase={() => onOpenAiSettingsTab('kb')}
+        onOpenSettings={() => onOpenAiSettingsTab('ai')}
+        realm={realm}
         toggle={toggleAiQuery}
       />
 
       <AiSettingsModal
+        activeClassName={activeClassName}
+        classes={classes}
+        initialTab={aiSettingsInitialTab}
         isOpen={isAiSettingsOpen}
+        realm={realm}
         toggle={toggleAiSettings}
       />
 
