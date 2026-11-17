@@ -52,6 +52,8 @@ import './RealmBrowser.scss';
 
 export interface IRealmBrowserProps {
   activeObjectId: IObjectIdentifier | null;
+  androidAutoSyncSec: number;
+  androidSyncStatus: string | null;
   breadcrumbs: IBreadcrumbItem[];
   canGoBack: boolean;
   canGoForward: boolean;
@@ -72,6 +74,7 @@ export interface IRealmBrowserProps {
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
   isAiSettingsOpen: boolean;
+  isAndroidTracked: boolean;
   isClassNameAvailable: (name: string) => boolean;
   isCommandPaletteOpen: boolean;
   isEncryptionDialogVisible: boolean;
@@ -88,6 +91,7 @@ export interface IRealmBrowserProps {
   onApplyAiQuery: (query: string) => void;
   onBack: () => void;
   onBreadcrumbClick: (index: number) => void;
+  onConfigureAndroidSync: () => void;
   onCancelTransaction: () => void;
   onClassFocussed: ClassFocussedHandler;
   onCommitTransaction: () => void;
@@ -126,6 +130,8 @@ export interface IRealmBrowserProps {
 
 export const RealmBrowser = ({
   activeObjectId,
+  androidAutoSyncSec,
+  androidSyncStatus,
   breadcrumbs,
   canGoBack,
   canGoForward,
@@ -145,6 +151,7 @@ export const RealmBrowser = ({
   isAddPropertyOpen,
   isAiQueryOpen,
   isAiSettingsOpen,
+  isAndroidTracked,
   isClassNameAvailable,
   isCommandPaletteOpen,
   isEncryptionDialogVisible,
@@ -158,6 +165,7 @@ export const RealmBrowser = ({
   onApplyAiQuery,
   onBack,
   onBreadcrumbClick,
+  onConfigureAndroidSync,
   onCancelTransaction,
   onClassFocussed,
   onCommitTransaction,
@@ -210,12 +218,16 @@ export const RealmBrowser = ({
           <>
             <NavigationBar
               activeObjectId={activeObjectId}
+              androidAutoSyncSec={androidAutoSyncSec}
+              androidSyncStatus={androidSyncStatus}
               breadcrumbs={breadcrumbs}
               canGoBack={canGoBack}
               canGoForward={canGoForward}
+              isAndroidTracked={isAndroidTracked}
               onBack={onBack}
               onForward={onForward}
               onBreadcrumbClick={onBreadcrumbClick}
+              onConfigureAndroidSync={onConfigureAndroidSync}
             />
             <Content
               dataVersion={dataVersion}

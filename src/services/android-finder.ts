@@ -533,7 +533,7 @@ export async function pullMatchingAndroidRealm(params: {
   };
 }
 
-interface IAndroidPullMetadata {
+export interface IAndroidPullMetadata {
   source?: string;
   serial?: string;
   deviceName?: string;
@@ -546,25 +546,102 @@ interface IAndroidPullMetadata {
   mtimeMs?: number;
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function getTrackedAndroidRealmInfo(
+  localRealmPath: string
+): IAndroidPullMetadata | null {
+  const metaFile = `${localRealmPath}.meta.json`;
+  if (!fs.existsSync(metaFile)) {
+    return null;
+  }
+  try {
+    const meta = fs.readJsonSync(metaFile) as IAndroidPullMetadata;
+    if (
+      meta.source === 'android-adb' &&
+      meta.serial &&
+      meta.pkg &&
+      meta.remoteRelPath
+    ) {
+      return meta;
+    }
+  } catch {
+    // ignore malformed metadata
+  }
+  return null;
+}
+
+async function fetchRemoteFileStat(
+  adbBin: string,
+  meta: IAndroidPullMetadata
+): Promise<{ sizeBytes: number; mtimeMs: number } | null> {
+  if (!meta.serial || !meta.pkg || !meta.remoteRelPath) {
+    return null;
+  }
+  const qPath = shellSingleQuote(meta.remoteRelPath);
+  const statSnippet = `f=${qPath}; [ -f "$f" ] || exit 2; sz=$(stat -c %s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || echo 0); mt=$(stat -c %Y "$f" 2>/dev/null || echo 0); lmt=$(stat -c %Y "$f.lock" 2>/dev/null || echo 0); [ "$lmt" -gt "$mt" ] 2>/dev/null && mt="$lmt"; echo "$sz|$mt"`;
+
+  const remoteCmd =
+    meta.accessMode === 'root'
+      ? `cd ${shellSingleQuote(`/data/data/${meta.pkg}`)} && ${statSnippet}`
+      : `run-as ${shellSingleQuote(meta.pkg)} sh -c ${shellSingleQuote(statSnippet)}`;
+
+  const out = await execFileAsync(
+    adbBin,
+    ['-s', meta.serial, 'shell', remoteCmd],
+    4000
+  );
+  const line = out.trim().split('\n').pop()?.trim() || '';
+  const parts = line.split('|');
+  if (parts.length !== 2) {
+    return null;
+  }
+  const sizeBytes = Number(parts[0]) || 0;
+  const mtimeSec = Number(parts[1]) || 0;
+  return {
+    sizeBytes,
+    mtimeMs: mtimeSec > 0 ? mtimeSec * 1000 : 0
+  };
+}
+
+export async function hasAndroidRemoteFileChanged(
+  localRealmPath: string
+): Promise<boolean> {
+  const meta = getTrackedAndroidRealmInfo(localRealmPath);
+  if (!meta || !meta.serial) {
+    return false;
+  }
+  const adbBin = resolveAdbBinary();
+  if (!adbBin) {
+    throw new Error('ADB binary not found');
+  }
+  const devices = await listAdbDevices(adbBin);
+  const ready = devices.find(
+    (d) => d.serial === meta.serial && d.state === 'device'
+  );
+  if (!ready) {
+    throw new Error(`Device ${meta.deviceName || meta.serial} is offline`);
+  }
+  const remoteStat = await fetchRemoteFileStat(adbBin, meta);
+  if (!remoteStat) {
+    return true;
+  }
+  if (!meta.sizeBytes || !meta.mtimeMs) {
+    return true;
+  }
+  return (
+    remoteStat.sizeBytes !== meta.sizeBytes ||
+    remoteStat.mtimeMs !== meta.mtimeMs
+  );
+}
+
 export async function refreshLocalAndroidRealmIfTracked(
   localRealmPath: string
 ): Promise<boolean> {
-  const metaFile = `${localRealmPath}.meta.json`;
-  if (!fs.existsSync(metaFile)) {
-    return false;
-  }
-  let meta: IAndroidPullMetadata;
-  try {
-    meta = fs.readJsonSync(metaFile) as IAndroidPullMetadata;
-  } catch {
-    return false;
-  }
-  if (
-    meta.source !== 'android-adb' ||
-    !meta.serial ||
-    !meta.pkg ||
-    !meta.remoteRelPath
-  ) {
+  const meta = getTrackedAndroidRealmInfo(localRealmPath);
+  if (!meta || !meta.serial || !meta.pkg || !meta.remoteRelPath) {
     return false;
   }
 
@@ -582,6 +659,7 @@ export async function refreshLocalAndroidRealmIfTracked(
     );
   }
 
+  const remoteStat = await fetchRemoteFileStat(adbBin, meta).catch(() => null);
   const fallbackDestDir = path.dirname(
     path.dirname(path.dirname(localRealmPath))
   );
@@ -595,8 +673,8 @@ export async function refreshLocalAndroidRealmIfTracked(
       pkg: meta.pkg,
       remoteRelPath: meta.remoteRelPath,
       accessMode: meta.accessMode === 'root' ? 'root' : 'run-as',
-      sizeBytes: meta.sizeBytes || 0,
-      mtimeMs: Date.now(),
+      sizeBytes: remoteStat?.sizeBytes ?? meta.sizeBytes ?? 0,
+      mtimeMs: remoteStat?.mtimeMs ?? Date.now(),
       isAppRunning: true,
       isActiveInProcess: true,
       isLatest: true

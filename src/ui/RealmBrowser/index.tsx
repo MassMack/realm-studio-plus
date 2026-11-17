@@ -28,7 +28,11 @@ import {
   unregisterOpenRealmSession,
   updateOpenRealmSession
 } from '../../services/active-realms';
-import { refreshLocalAndroidRealmIfTracked } from '../../services/android-finder';
+import {
+  getTrackedAndroidRealmInfo,
+  hasAndroidRemoteFileChanged,
+  refreshLocalAndroidRealmIfTracked
+} from '../../services/android-finder';
 import { DataExporter, DataExportFormat } from '../../services/data-exporter';
 import * as dataImporter from '../../services/data-importer';
 import {
@@ -124,6 +128,8 @@ interface INavigationEntry {
 export interface IRealmBrowserState extends IRealmLoadingComponentState {
   // A number that we can use to make components update on changes to data
   activeObjectId: IObjectIdentifier | null;
+  androidAutoSyncSec: number;
+  androidSyncStatus: string | null;
   dataVersion: number;
   dataVersionAtBeginning?: number;
   allowCreate: boolean;
@@ -135,6 +141,7 @@ export interface IRealmBrowserState extends IRealmLoadingComponentState {
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
   isAiSettingsOpen: boolean;
+  isAndroidTracked: boolean;
   isCommandPaletteOpen: boolean;
   isEncryptionDialogVisible: boolean;
   isGlobalSearchOpen: boolean;
@@ -155,6 +162,8 @@ class RealmBrowserContainer
 {
   public state: IRealmBrowserState = {
     activeObjectId: null,
+    androidAutoSyncSec: 0,
+    androidSyncStatus: null,
     dataVersion: 0,
     allowCreate: false,
     editMode:
@@ -167,6 +176,7 @@ class RealmBrowserContainer
     isAddPropertyOpen: false,
     isAiQueryOpen: false,
     isAiSettingsOpen: false,
+    isAndroidTracked: false,
     isCommandPaletteOpen: false,
     isEncryptionDialogVisible: false,
     isGlobalSearchOpen: false,
@@ -192,6 +202,8 @@ class RealmBrowserContainer
   private isReloading = false;
   private readonly activeSessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   private pendingFocusClassName?: string;
+  private androidSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private isAndroidSyncTicking = false;
   private untriedCandidateKeys: string[] | null = null;
   private pendingEncryptionSave?: {
     key: string;
@@ -208,6 +220,7 @@ class RealmBrowserContainer
   }
 
   public componentWillUnmount() {
+    this.stopAndroidAutoSync();
     unregisterOpenRealmSession(this.activeSessionId);
     super.componentWillUnmount();
     this.removeListeners();
@@ -233,6 +246,8 @@ class RealmBrowserContainer
     return (
       <RealmBrowser
         activeObjectId={this.state.activeObjectId}
+        androidAutoSyncSec={this.state.androidAutoSyncSec}
+        androidSyncStatus={this.state.androidSyncStatus}
         breadcrumbs={breadcrumbs}
         canGoBack={historyIndex > 0}
         canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
@@ -253,6 +268,7 @@ class RealmBrowserContainer
         isAddPropertyOpen={this.state.isAddPropertyOpen}
         isAiQueryOpen={this.state.isAiQueryOpen}
         isAiSettingsOpen={this.state.isAiSettingsOpen}
+        isAndroidTracked={this.state.isAndroidTracked}
         isClassNameAvailable={this.isClassNameAvailable}
         isCommandPaletteOpen={this.state.isCommandPaletteOpen}
         isEncryptionDialogVisible={this.state.isEncryptionDialogVisible}
@@ -265,6 +281,7 @@ class RealmBrowserContainer
         onApplyAiQuery={this.onApplyAiQuery}
         onBack={this.onNavigateBack}
         onBreadcrumbClick={this.onBreadcrumbClick}
+        onConfigureAndroidSync={this.onConfigureAndroidSync}
         onCancelTransaction={this.onCancelTransaction}
         onClassFocussed={this.onClassFocussed}
         onCommitTransaction={this.onCommitTransaction}
@@ -559,8 +576,10 @@ class RealmBrowserContainer
       };
     }
 
+    const isAndroidTracked = !!getTrackedAndroidRealmInfo(this.realm.path);
     this.setState({
-      classes: this.realm.schema
+      classes: this.realm.schema,
+      isAndroidTracked
     });
 
     const firstSchemaName = this.realm.schema.find(
@@ -748,9 +767,33 @@ class RealmBrowserContainer
       {
         id: 'action:reload',
         category: 'Action',
-        label: 'Reload Realm File from Disk',
+        label: this.state.isAndroidTracked
+          ? 'Pull Fresh from Android & Reload'
+          : 'Reload Realm File from Disk',
         run: () => this.onManualReload()
       },
+      ...(this.state.isAndroidTracked
+        ? [
+            {
+              id: 'action:android-sync-5s',
+              category: 'Android',
+              label: 'Android Auto Sync: Every 5 Seconds',
+              run: () => this.setAndroidAutoSync(5)
+            },
+            {
+              id: 'action:android-sync-10s',
+              category: 'Android',
+              label: 'Android Auto Sync: Every 10 Seconds',
+              run: () => this.setAndroidAutoSync(10)
+            },
+            {
+              id: 'action:android-sync-off',
+              category: 'Android',
+              label: 'Android Auto Sync: Turn Off',
+              run: () => this.setAndroidAutoSync(0)
+            }
+          ]
+        : []),
       {
         id: 'action:reveal-finder',
         category: 'Action',
@@ -1358,7 +1401,104 @@ class RealmBrowserContainer
     void this.reloadFromDisk({ rePullAndroid: true });
   };
 
-  private reloadFromDisk = async (options?: { rePullAndroid?: boolean }) => {
+  private stopAndroidAutoSync = () => {
+    if (this.androidSyncTimer) {
+      clearInterval(this.androidSyncTimer);
+      this.androidSyncTimer = null;
+    }
+  };
+
+  private setAndroidAutoSync = (seconds: 0 | 5 | 10 | 30) => {
+    this.stopAndroidAutoSync();
+    if (seconds <= 0) {
+      this.setState({ androidAutoSyncSec: 0, androidSyncStatus: null });
+      return;
+    }
+    this.setState({
+      androidAutoSyncSec: seconds,
+      androidSyncStatus: 'Active'
+    });
+    this.androidSyncTimer = setInterval(() => {
+      void this.onAndroidAutoSyncTick();
+    }, seconds * 1000);
+    void this.onAndroidAutoSyncTick();
+  };
+
+  private onAndroidAutoSyncTick = async () => {
+    if (
+      this.isReloading ||
+      this.isAndroidSyncTicking ||
+      !this.props.realm?.path ||
+      (this.realm && this.realm.isInTransaction)
+    ) {
+      return;
+    }
+    this.isAndroidSyncTicking = true;
+    this.setState({ androidSyncStatus: 'Checking...' });
+    try {
+      const changed = await hasAndroidRemoteFileChanged(this.props.realm.path);
+      if (!changed) {
+        if (this.state.androidAutoSyncSec > 0) {
+          this.setState({ androidSyncStatus: 'Up to date' });
+        }
+        return;
+      }
+      this.setState({ androidSyncStatus: 'Pulling update...' });
+      await this.reloadFromDisk({ rePullAndroid: true, quietOnError: true });
+      if (this.state.androidAutoSyncSec > 0) {
+        const syncedAt = new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+        this.setState({ androidSyncStatus: `Synced ${syncedAt}` });
+      }
+    } catch {
+      if (this.state.androidAutoSyncSec > 0) {
+        this.setState({ androidSyncStatus: 'ADB offline' });
+      }
+    } finally {
+      this.isAndroidSyncTicking = false;
+    }
+  };
+
+  private onConfigureAndroidSync = () => {
+    const { Menu, MenuItem } = remote;
+    const menu = new Menu();
+    const cur = this.state.androidAutoSyncSec;
+
+    for (const sec of [5, 10, 30] as const) {
+      menu.append(
+        new MenuItem({
+          label: `Auto Sync every ${sec} seconds`,
+          type: 'checkbox',
+          checked: cur === sec,
+          click: () => this.setAndroidAutoSync(sec)
+        })
+      );
+    }
+    menu.append(
+      new MenuItem({
+        label: 'Turn Auto Sync Off',
+        type: 'checkbox',
+        checked: cur === 0,
+        click: () => this.setAndroidAutoSync(0)
+      })
+    );
+    menu.append(new MenuItem({ type: 'separator' }));
+    menu.append(
+      new MenuItem({
+        label: 'Pull Fresh from Android Now',
+        click: () => this.onManualReload()
+      })
+    );
+    menu.popup();
+  };
+
+  private reloadFromDisk = async (options?: {
+    rePullAndroid?: boolean;
+    quietOnError?: boolean;
+  }) => {
     if (this.isReloading) {
       return;
     }
@@ -1426,18 +1566,26 @@ class RealmBrowserContainer
       }
     }
 
+    let syncError: unknown;
     try {
       if (options?.rePullAndroid && this.props.realm?.path) {
         try {
           await refreshLocalAndroidRealmIfTracked(this.props.realm.path);
         } catch (adbErr) {
-          showError('Failed pulling fresh Android Realm via ADB', adbErr);
+          if (options.quietOnError) {
+            syncError = adbErr;
+          } else {
+            showError('Failed pulling fresh Android Realm via ADB', adbErr);
+          }
         }
       }
       await this.loadRealm(
         this.props.realm,
         this.props.import ? this.props.import.schema : undefined
       );
+      if (syncError) {
+        throw syncError;
+      }
     } finally {
       this.startWatchingRealmFile();
       this.isReloading = false;

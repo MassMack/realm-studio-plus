@@ -34,12 +34,16 @@ export interface IBreadcrumbItem {
 
 export interface INavigationBarProps {
   activeObjectId?: IObjectIdentifier | null;
+  androidAutoSyncSec?: number;
+  androidSyncStatus?: string | null;
   breadcrumbs: IBreadcrumbItem[];
   canGoBack: boolean;
   canGoForward: boolean;
+  isAndroidTracked?: boolean;
   onBack: () => void;
   onForward: () => void;
   onBreadcrumbClick: (index: number) => void;
+  onConfigureAndroidSync?: () => void;
 }
 
 const isMac = process.platform === 'darwin';
@@ -48,12 +52,16 @@ const forwardShortcutHint = isMac ? '⌘]' : 'Alt+→';
 
 const NavigationBarComponent = ({
   activeObjectId,
+  androidAutoSyncSec = 0,
+  androidSyncStatus,
   breadcrumbs,
   canGoBack,
   canGoForward,
+  isAndroidTracked = false,
   onBack,
   onForward,
-  onBreadcrumbClick
+  onBreadcrumbClick,
+  onConfigureAndroidSync
 }: INavigationBarProps) => {
   const [copied, setCopied] = useState(false);
 
@@ -150,6 +158,34 @@ const NavigationBarComponent = ({
           );
         })}
       </nav>
+
+      {isAndroidTracked && onConfigureAndroidSync ? (
+        <Button
+          size="sm"
+          color={androidAutoSyncSec > 0 ? 'success' : 'secondary'}
+          className="RealmBrowser__NavBar__AndroidSync"
+          onClick={onConfigureAndroidSync}
+          title="Configure Android ADB Auto-Sync timer (checks phone/emulator and pulls fresh data automatically on changes)"
+        >
+          <i
+            className={classNames('fa', {
+              'fa-android': androidAutoSyncSec === 0,
+              'fa-refresh fa-spin':
+                androidAutoSyncSec > 0 &&
+                (androidSyncStatus === 'Checking...' ||
+                  androidSyncStatus === 'Pulling update...'),
+              'fa-refresh':
+                androidAutoSyncSec > 0 &&
+                androidSyncStatus !== 'Checking...' &&
+                androidSyncStatus !== 'Pulling update...'
+            })}
+            aria-hidden="true"
+          />{' '}
+          {androidAutoSyncSec > 0
+            ? `Auto Sync: ${androidAutoSyncSec}s${androidSyncStatus ? ` (${androidSyncStatus})` : ''}`
+            : 'Android Auto Sync: Off'}
+        </Button>
+      ) : null}
 
       {currentId ? (
         <button

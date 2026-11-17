@@ -168,6 +168,14 @@
       font-size: .75rem;
       margin-left: .15rem;
     }
+
+    &__AndroidSync {
+      flex-shrink: 0;
+      font-size: .75rem;
+      line-height: 1.1;
+      padding: ($spacer * .2) ($spacer * .5);
+      white-space: nowrap;
+    }
   }
 
   &__OverviewSummary {
