@@ -112,6 +112,9 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
         deviceName: f.deviceName,
         deviceUdid: f.deviceUdid,
         isBooted: f.isBooted,
+        isActiveInProcess: f.isActiveInProcess,
+        activeProcessName: f.activeProcessName,
+        isLatest: f.isLatest,
         sizeBytes: f.size,
         modifiedAt: new Date(f.mtimeMs).toISOString()
       }));

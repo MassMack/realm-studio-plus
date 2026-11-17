@@ -46,6 +46,57 @@ import { showError } from '../reusable/errors';
 import { Greeting } from './Greeting';
 import { IHistoryEntry } from './HistoryPanel/HistoryEntry';
 
+function formatByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function formatRecentTime(mtimeMs: number): string {
+  if (!mtimeMs) {
+    return 'unknown time';
+  }
+  const diffSec = Math.floor((Date.now() - mtimeMs) / 1000);
+  if (diffSec >= 0 && diffSec < 60) {
+    return 'just now';
+  }
+  if (diffSec >= 60 && diffSec < 3600) {
+    return `${Math.floor(diffSec / 60)}m ago`;
+  }
+  const d = new Date(mtimeMs);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) {
+    return `Today ${time}`;
+  }
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+function buildStatusPrefix(opts: {
+  isActiveInProcess?: boolean;
+  activeTarget?: string;
+  isLatest?: boolean;
+  isAppRunning?: boolean;
+}): string {
+  const tags: string[] = [];
+  if (opts.isActiveInProcess) {
+    tags.push(
+      opts.activeTarget ? `DEBUGGING (${opts.activeTarget})` : 'DEBUGGING NOW'
+    );
+  } else if (opts.isAppRunning) {
+    tags.push('APP RUNNING');
+  }
+  if (opts.isLatest) {
+    tags.push('LATEST');
+  }
+  if (tags.length === 0) {
+    return '';
+  }
+  const icon = opts.isActiveInProcess ? '🟢' : opts.isLatest ? '★' : '●';
+  return `${icon} [${tags.join(' · ')}] `;
+}
+
 interface IGreetingContainerState {
   androidStatus: string | null;
   isDraggingOver: boolean;
@@ -233,7 +284,7 @@ class GreetingContainer extends React.Component<
       } else {
         menu.append(
           new MenuItem({
-            label: `Found ${files.length} Android Realm(s) — click to pull & open:`,
+            label: `Found ${files.length} Android Realm(s) — active debugging & latest first:`,
             enabled: false
           })
         );
@@ -242,13 +293,17 @@ class GreetingContainer extends React.Component<
           const fileName = path.basename(item.remoteRelPath);
           const parentFolder = path.dirname(item.remoteRelPath);
           const devTag = `${item.isEmulator ? '[Emu] ' : ''}${item.deviceName}`;
-          const sizeLabel =
-            item.sizeBytes >= 1024 * 1024
-              ? `${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
-              : `${(item.sizeBytes / 1024).toFixed(0)} KB`;
+          const prefix = buildStatusPrefix({
+            isActiveInProcess: item.isActiveInProcess,
+            activeTarget: item.activePid ? `PID ${item.activePid}` : undefined,
+            isAppRunning: item.isAppRunning,
+            isLatest: item.isLatest
+          });
+          const sizeLabel = formatByteSize(item.sizeBytes);
+          const timeLabel = formatRecentTime(item.mtimeMs);
           menu.append(
             new MenuItem({
-              label: `${fileName} (${devTag} • ${sizeLabel} • ${item.pkg}/${parentFolder})`,
+              label: `${prefix}${fileName} (${devTag} • ${sizeLabel} • ${timeLabel} • ${item.pkg}/${parentFolder})`,
               click: () => {
                 void this.handlePullAndroidFile(adbBin, item);
               }
@@ -291,7 +346,7 @@ class GreetingContainer extends React.Component<
     } else {
       menu.append(
         new MenuItem({
-          label: `Found ${found.length} Simulator Realm(s) — Booted & most recent first:`,
+          label: `Found ${found.length} Simulator Realm(s) — active debugging, Booted & latest first:`,
           enabled: false
         })
       );
@@ -300,11 +355,16 @@ class GreetingContainer extends React.Component<
         const fileName = path.basename(item.path);
         const parentDir = path.basename(path.dirname(item.path));
         const devLabel = `${item.isBooted ? '● ' : ''}${item.deviceName}`;
-        const kb = (item.size / 1024).toFixed(0);
-        const timeStr = new Date(item.mtimeMs).toLocaleTimeString();
+        const prefix = buildStatusPrefix({
+          isActiveInProcess: item.isActiveInProcess,
+          activeTarget: item.activeProcessName,
+          isLatest: item.isLatest
+        });
+        const sizeLabel = formatByteSize(item.size);
+        const timeStr = formatRecentTime(item.mtimeMs);
         menu.append(
           new MenuItem({
-            label: `${fileName} (${devLabel} • ${kb} KB • ${parentDir} • ${timeStr})`,
+            label: `${prefix}${fileName} (${devLabel} • ${sizeLabel} • ${timeStr} • ${parentDir})`,
             click: () => {
               void main
                 .showOpenLocalRealmAtPath(item.path)

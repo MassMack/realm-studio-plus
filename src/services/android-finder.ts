@@ -37,6 +37,10 @@ export interface IAndroidRealmFile {
   accessMode: 'run-as' | 'root';
   sizeBytes: number;
   mtimeMs: number;
+  isAppRunning: boolean;
+  isActiveInProcess: boolean;
+  activePid?: string;
+  isLatest: boolean;
 }
 
 export interface IAndroidScanResult {
@@ -136,23 +140,49 @@ export async function listAdbDevices(adbBin: string): Promise<IAdbDeviceInfo[]> 
 
 const REMOTE_SCAN_SCRIPT = `
 uid=$(id -u 2>/dev/null || echo 2000)
-scan_dir='find files databases app_flutter no_backup -maxdepth 5 -type f -name "*.realm" 2>/dev/null | while IFS= read -r f; do sz=$(stat -c %s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || echo 0); mt=$(stat -c %Y "$f" 2>/dev/null || echo 0); echo "$sz|$mt|$f"; done'
+scan_dir='find files databases app_flutter no_backup -maxdepth 5 -type f -name "*.realm" 2>/dev/null | while IFS= read -r f; do sz=$(stat -c %s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || echo 0); mt=$(stat -c %Y "$f" 2>/dev/null || echo 0); lmt=$(stat -c %Y "$f.lock" 2>/dev/null || echo 0); [ "$lmt" -gt "$mt" ] 2>/dev/null && mt="$lmt"; echo "$sz|$mt|$f"; done'
 for p in $(pm list packages -3 2>/dev/null | cut -d: -f2 | tr -d "\\r"); do
+  pid=$(pidof "$p" 2>/dev/null | awk '{print $1}')
   found=$(run-as "$p" sh -c "$scan_dir" 2>/dev/null)
-  if [ -n "$found" ]; then
-    printf '%s\\n' "$found" | while IFS= read -r line; do
-      [ -n "$line" ] && echo "run-as|$p|$line"
-    done
-  elif [ "$uid" = "0" ] && [ -d "/data/data/$p" ]; then
+  mode="run-as"
+  if [ -z "$found" ] && [ "$uid" = "0" ] && [ -d "/data/data/$p" ]; then
     found=$(cd "/data/data/$p" 2>/dev/null && sh -c "$scan_dir" 2>/dev/null)
-    if [ -n "$found" ]; then
-      printf '%s\\n' "$found" | while IFS= read -r line; do
-        [ -n "$line" ] && echo "root|$p|$line"
-      done
+    mode="root"
+  fi
+  if [ -n "$found" ]; then
+    if [ -n "$pid" ]; then
+      if [ "$mode" = "run-as" ]; then
+        fds=$(run-as "$p" ls -l "/proc/$pid/fd" 2>/dev/null | grep -F ".realm" || true)
+      else
+        fds=$(ls -l "/proc/$pid/fd" 2>/dev/null | grep -F ".realm" || true)
+      fi
+      if [ -n "$fds" ]; then
+        printf '%s\\n' "$fds" | while IFS= read -r fdline; do
+          target="\${fdline#* -> }"
+          [ -n "$target" ] && echo "FD|$p|$pid|$target"
+        done
+      fi
     fi
+    printf '%s\\n' "$found" | while IFS= read -r line; do
+      [ -n "$line" ] && echo "FILE|$mode|$p|$line|$pid"
+    done
   fi
 done
 `.trim();
+
+function normalizeOpenRealmTarget(targetPath: string): string {
+  const mgmtIdx = targetPath.indexOf('.realm.management/');
+  if (mgmtIdx >= 0) {
+    return `${targetPath.slice(0, mgmtIdx)}.realm`;
+  }
+  if (targetPath.endsWith('.realm.lock')) {
+    return targetPath.slice(0, -'.lock'.length);
+  }
+  if (targetPath.endsWith('.realm.note')) {
+    return targetPath.slice(0, -'.note'.length);
+  }
+  return targetPath;
+}
 
 async function scanSingleAndroidDevice(
   adbBin: string,
@@ -164,31 +194,45 @@ async function scanSingleAndroidDevice(
     20000
   );
 
-  const items: IAndroidRealmFile[] = [];
+  const openFilesByPkg = new Map<string, Set<string>>();
+  const rawItems: Array<Omit<IAndroidRealmFile, 'isActiveInProcess'>> = [];
+
   for (const rawLine of out.split('\n')) {
     const line = rawLine.trim();
     if (!line) {
       continue;
     }
-    const firstSep = line.indexOf('|');
-    const secondSep = firstSep >= 0 ? line.indexOf('|', firstSep + 1) : -1;
-    const thirdSep = secondSep >= 0 ? line.indexOf('|', secondSep + 1) : -1;
-    const fourthSep = thirdSep >= 0 ? line.indexOf('|', thirdSep + 1) : -1;
-    if (fourthSep < 0) {
+    const parts = line.split('|');
+    if (parts[0] === 'FD' && parts.length >= 4) {
+      const pkg = parts[1];
+      const target = normalizeOpenRealmTarget(parts.slice(3).join('|'));
+      if (pkg && target) {
+        let set = openFilesByPkg.get(pkg);
+        if (!set) {
+          set = new Set<string>();
+          openFilesByPkg.set(pkg, set);
+        }
+        set.add(target);
+      }
       continue;
     }
 
-    const modeRaw = line.slice(0, firstSep);
-    const pkg = line.slice(firstSep + 1, secondSep);
-    const sizeBytes = Number(line.slice(secondSep + 1, thirdSep)) || 0;
-    const mtimeSec = Number(line.slice(thirdSep + 1, fourthSep)) || 0;
-    const remoteRelPath = line.slice(fourthSep + 1);
+    // Format: FILE|mode|pkg|sizeBytes|mtimeSec|remoteRelPath|pid
+    if (parts[0] !== 'FILE' || parts.length < 7) {
+      continue;
+    }
+    const modeRaw = parts[1];
+    const pkg = parts[2];
+    const sizeBytes = Number(parts[3]) || 0;
+    const mtimeSec = Number(parts[4]) || 0;
+    const pid = parts[parts.length - 1] || '';
+    const remoteRelPath = parts.slice(5, parts.length - 1).join('|');
 
     if (!pkg || !remoteRelPath.endsWith('.realm')) {
       continue;
     }
 
-    items.push({
+    rawItems.push({
       serial: device.serial,
       deviceName: device.model,
       isEmulator: device.isEmulator,
@@ -196,10 +240,27 @@ async function scanSingleAndroidDevice(
       remoteRelPath,
       accessMode: modeRaw === 'root' ? 'root' : 'run-as',
       sizeBytes,
-      mtimeMs: mtimeSec > 0 ? mtimeSec * 1000 : 0
+      mtimeMs: mtimeSec > 0 ? mtimeSec * 1000 : 0,
+      isAppRunning: pid.length > 0,
+      activePid: pid || undefined,
+      isLatest: false
     });
   }
-  return items;
+
+  return rawItems.map((item) => {
+    const openSet = openFilesByPkg.get(item.pkg);
+    const suffix = `/${item.remoteRelPath}`;
+    const isActiveInProcess = openSet
+      ? Array.from(openSet).some(
+          (openPath) =>
+            openPath === item.remoteRelPath || openPath.endsWith(suffix)
+        )
+      : false;
+    return {
+      ...item,
+      isActiveInProcess
+    };
+  });
 }
 
 export async function findAndroidRealmFiles(
@@ -218,9 +279,26 @@ export async function findAndroidRealmFiles(
     )
   );
 
-  const files = perDevice
-    .flat()
-    .sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0));
+  const flat = perDevice.flat();
+  const newestMtime = flat.reduce(
+    (max, item) => (item.mtimeMs > max ? item.mtimeMs : max),
+    0
+  );
+
+  const files = flat
+    .map((item) => ({
+      ...item,
+      isLatest: newestMtime > 0 && item.mtimeMs === newestMtime
+    }))
+    .sort((a, b) => {
+      if (a.isActiveInProcess !== b.isActiveInProcess) {
+        return a.isActiveInProcess ? -1 : 1;
+      }
+      if (a.isAppRunning !== b.isAppRunning) {
+        return a.isAppRunning ? -1 : 1;
+      }
+      return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+    });
 
   return { devices, files };
 }

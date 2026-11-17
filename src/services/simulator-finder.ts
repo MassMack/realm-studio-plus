@@ -33,6 +33,9 @@ export interface ISimulatorRealmFile {
   deviceUdid: string;
   deviceName: string;
   isBooted: boolean;
+  isActiveInProcess: boolean;
+  activeProcessName?: string;
+  isLatest: boolean;
 }
 
 const SKIP_SIM_DIRS = new Set([
@@ -89,6 +92,101 @@ interface IRawSimFile {
   deviceUdid: string;
 }
 
+function getEffectiveRealmMtime(realmPath: string, fallbackMtime: number): number {
+  let latest = fallbackMtime;
+  const lockPath = `${realmPath}.lock`;
+  try {
+    if (fs.existsSync(lockPath)) {
+      const lockStat = fs.statSync(lockPath);
+      if (lockStat.mtimeMs > latest) {
+        latest = lockStat.mtimeMs;
+      }
+    }
+  } catch {
+    // ignore lock stat failure
+  }
+  return latest;
+}
+
+function normalizeRealmTargetPath(openPath: string): string {
+  const mgmtIdx = openPath.indexOf('.realm.management/');
+  if (mgmtIdx >= 0) {
+    return `${openPath.slice(0, mgmtIdx)}.realm`;
+  }
+  if (openPath.endsWith('.realm.lock')) {
+    return openPath.slice(0, -'.lock'.length);
+  }
+  return openPath;
+}
+
+function getOpenRealmProcessesOnMac(
+  realmPaths: string[]
+): Map<string, string> {
+  const activeByPath = new Map<string, string>();
+  if (process.platform !== 'darwin' || realmPaths.length === 0) {
+    return activeByPath;
+  }
+
+  const candidateToRealm = new Map<string, string>();
+  const targets: string[] = [];
+  for (const rPath of realmPaths.slice(0, 40)) {
+    const checkPaths = [rPath, `${rPath}.lock`];
+    for (const p of checkPaths) {
+      if (!fs.existsSync(p)) {
+        continue;
+      }
+      targets.push(p);
+      candidateToRealm.set(p, rPath);
+      try {
+        candidateToRealm.set(fs.realpathSync(p), rPath);
+      } catch {
+        // ignore realpath error
+      }
+    }
+  }
+  if (targets.length === 0) {
+    return activeByPath;
+  }
+
+  let rawOut = '';
+  try {
+    rawOut = execFileSync('lsof', ['-F', 'pcn', '--', ...targets], {
+      encoding: 'utf8',
+      timeout: 1500
+    });
+  } catch (err) {
+    const stdout = (err as { stdout?: unknown })?.stdout;
+    if (typeof stdout === 'string') {
+      rawOut = stdout;
+    }
+  }
+
+  let currentPid = '';
+  let currentCmd = '';
+  const selfPid = String(process.pid);
+  for (const line of rawOut.split('\n')) {
+    if (!line) {
+      continue;
+    }
+    const tag = line[0];
+    const value = line.slice(1);
+    if (tag === 'p') {
+      currentPid = value;
+      currentCmd = '';
+    } else if (tag === 'c') {
+      currentCmd = value.replace(/\\x20/g, ' ');
+    } else if (tag === 'n' && currentPid && currentPid !== selfPid) {
+      const normalized = normalizeRealmTargetPath(value);
+      const matchedRealm =
+        candidateToRealm.get(value) || candidateToRealm.get(normalized);
+      if (matchedRealm && !/realm\s*studio/i.test(currentCmd)) {
+        activeByPath.set(matchedRealm, currentCmd || `PID ${currentPid}`);
+      }
+    }
+  }
+  return activeByPath;
+}
+
 function scanContainerForRealmFiles(
   dir: string,
   deviceUdid: string,
@@ -121,7 +219,7 @@ function scanContainerForRealmFiles(
         const stat = fs.statSync(fullPath);
         acc.push({
           path: fullPath,
-          mtimeMs: stat.mtimeMs,
+          mtimeMs: getEffectiveRealmMtime(fullPath, stat.mtimeMs),
           size: stat.size,
           deviceUdid
         });
@@ -171,16 +269,31 @@ export function findSimulatorRealmFiles(
     }
   }
 
+  const activeProcesses = getOpenRealmProcessesOnMac(
+    rawFiles.map((f) => f.path)
+  );
+  const newestMtime = rawFiles.reduce(
+    (max, item) => (item.mtimeMs > max ? item.mtimeMs : max),
+    0
+  );
+
   return rawFiles
     .map((item) => {
       const devInfo = deviceMap.get(item.deviceUdid);
+      const activeProcessName = activeProcesses.get(item.path);
       return {
         ...item,
         deviceName: devInfo?.name || item.deviceUdid.slice(0, 8),
-        isBooted: !!devInfo?.isBooted
+        isBooted: !!devInfo?.isBooted,
+        isActiveInProcess: !!activeProcessName,
+        activeProcessName,
+        isLatest: newestMtime > 0 && item.mtimeMs === newestMtime
       };
     })
     .sort((a, b) => {
+      if (a.isActiveInProcess !== b.isActiveInProcess) {
+        return a.isActiveInProcess ? -1 : 1;
+      }
       if (a.isBooted !== b.isBooted) {
         return a.isBooted ? -1 : 1;
       }
