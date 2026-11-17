@@ -20,6 +20,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
+  findAndroidRealmFiles,
+  resolveAdbBinary
+} from '../services/android-finder';
+import {
   countRealmObjects,
   getRealmClassSchemas,
   inspectRealmOverview,
@@ -61,11 +65,13 @@ function failText(err: unknown) {
 }
 
 function wrapReadOnly<Args>(
-  fn: (args: Args) => unknown
-): (args: Args) => ReturnType<typeof okJson> | ReturnType<typeof failText> {
-  return (args: Args) => {
+  fn: (args: Args) => unknown | Promise<unknown>
+): (
+  args: Args
+) => Promise<ReturnType<typeof okJson> | ReturnType<typeof failText>> {
+  return async (args: Args) => {
     try {
-      return okJson(fn(args));
+      return okJson(await fn(args));
     } catch (err) {
       return failText(err);
     }
@@ -112,6 +118,40 @@ export function createRealmMcpServer(version = '20.2.0'): McpServer {
       return {
         totalFound: files.length,
         files: capped
+      };
+    })
+  );
+
+  server.registerTool(
+    'list_android_realms',
+    {
+      title: 'List Android Device & Emulator Realms',
+      description:
+        'Scan all connected physical Android phones and running Android Emulators via ADB for .realm files inside debuggable apps (or rooted emulators).',
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe('Maximum number of files to return (default 20).')
+      },
+      annotations: READ_ONLY_ANNOTATIONS
+    },
+    wrapReadOnly(async ({ limit }) => {
+      const adbBin = resolveAdbBinary();
+      if (!adbBin) {
+        throw new Error('Android Platform-Tools (adb) not found.');
+      }
+      const { devices, files } = await findAndroidRealmFiles(adbBin);
+      return {
+        devices,
+        totalFound: files.length,
+        files: files.slice(0, limit ?? 20).map((f) => ({
+          ...f,
+          modifiedAt: f.mtimeMs ? new Date(f.mtimeMs).toISOString() : ''
+        }))
       };
     })
   );

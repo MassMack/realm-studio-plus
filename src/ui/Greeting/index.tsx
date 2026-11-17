@@ -16,17 +16,21 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
-import { execFileSync } from 'child_process';
 import electron from 'electron';
 import * as remote from '@electron/remote';
 import fs from 'fs-extra';
-import os from 'os';
 import path from 'path';
 import React from 'react';
 import Realm from 'realm';
 
 import { main } from '../../actions/main';
 import { IUpdateStatus } from '../../main/Updater';
+import {
+  findAndroidRealmFiles,
+  IAndroidRealmFile,
+  pullAndroidRealmFile,
+  resolveAdbBinary
+} from '../../services/android-finder';
 import {
   getRecentFiles,
   IRecentFile,
@@ -43,6 +47,7 @@ import { Greeting } from './Greeting';
 import { IHistoryEntry } from './HistoryPanel/HistoryEntry';
 
 interface IGreetingContainerState {
+  androidStatus: string | null;
   isDraggingOver: boolean;
   recentFiles: IRecentFile[];
   updateStatus: IUpdateStatus;
@@ -54,6 +59,7 @@ class GreetingContainer extends React.Component<
   IGreetingContainerState
 > {
   public state: IGreetingContainerState = {
+    androidStatus: null,
     isDraggingOver: false,
     recentFiles: getRecentFiles(),
     updateStatus: {
@@ -127,33 +133,53 @@ class GreetingContainer extends React.Component<
     }
   };
 
-  private resolveAdbBinary(): string | null {
-    const candidates = [
-      path.join(os.homedir(), 'Library/Android/sdk/platform-tools/adb'),
-      '/opt/homebrew/bin/adb',
-      '/usr/local/bin/adb',
-      'adb'
-    ];
-    for (const candidate of candidates) {
-      try {
-        execFileSync(candidate, ['version'], {
-          stdio: 'ignore',
-          timeout: 2000
-        });
-        return candidate;
-      } catch {
-        // try next
-      }
+  private handlePullAndroidFile = async (
+    adbBin: string,
+    item: IAndroidRealmFile
+  ) => {
+    const fileName = path.basename(item.remoteRelPath);
+    const totalMb =
+      item.sizeBytes > 0
+        ? ` / ${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+        : '';
+    this.setState({
+      androidStatus: `Pulling ${fileName} from ${item.deviceName}...`
+    });
+    try {
+      const destDir = path.join(
+        remote.app.getPath('temp'),
+        'realm-studio-android'
+      );
+      const destFile = await pullAndroidRealmFile({
+        adbBin,
+        item,
+        destDir,
+        onProgress: (written) => {
+          const mb = (written / (1024 * 1024)).toFixed(1);
+          this.setState({
+            androidStatus: `Pulling ${fileName}: ${mb} MB${totalMb}...`
+          });
+        }
+      });
+      this.setState({ androidStatus: null });
+      void main
+        .showOpenLocalRealmAtPath(destFile)
+        .then(this.refreshRecentFiles);
+    } catch (err) {
+      this.setState({ androidStatus: null });
+      showError('Failed pulling Realm file via ADB', err);
     }
-    return null;
-  }
+  };
 
-  private onFindAndroidRealms = () => {
+  private onFindAndroidRealms = async () => {
+    if (this.state.androidStatus) {
+      return;
+    }
     const { Menu, MenuItem } = remote;
-    const menu = new Menu();
-    const adbBin = this.resolveAdbBinary();
+    const adbBin = resolveAdbBinary();
 
     if (!adbBin) {
+      const menu = new Menu();
       menu.append(
         new MenuItem({
           label: 'Android Platform-Tools (adb) not found on this machine',
@@ -164,133 +190,77 @@ class GreetingContainer extends React.Component<
       return;
     }
 
-    let deviceSerials: string[] = [];
-    try {
-      const out = execFileSync(adbBin, ['devices'], {
-        encoding: 'utf8',
-        timeout: 3000
-      });
-      deviceSerials = out
-        .split('\n')
-        .slice(1)
-        .map((line) => line.trim())
-        .filter((line) => line.endsWith('\tdevice'))
-        .map((line) => line.split('\t')[0]);
-    } catch {
-      // ignore
-    }
-
-    if (deviceSerials.length === 0) {
-      menu.append(
-        new MenuItem({
-          label: 'No running Android Emulator or connected ADB device found',
-          enabled: false
-        })
-      );
-      menu.popup();
-      return;
-    }
-
-    const serial = deviceSerials[0];
-    const discovered: Array<{
-      pkg: string;
-      remoteRelPath: string;
-      label: string;
-    }> = [];
+    this.setState({
+      androidStatus: 'Scanning Android devices & emulators...'
+    });
 
     try {
-      const pkgOut = execFileSync(
-        adbBin,
-        ['-s', serial, 'shell', 'pm', 'list', 'packages', '-3'],
-        { encoding: 'utf8', timeout: 4000 }
-      );
-      const packages = pkgOut
-        .split('\n')
-        .map((l) => l.trim().replace(/^package:/, ''))
-        .filter(Boolean)
-        .slice(0, 30);
+      const { devices, files } = await findAndroidRealmFiles(adbBin);
+      this.setState({ androidStatus: null });
 
-      for (const pkg of packages) {
-        try {
-          const filesOut = execFileSync(
-            adbBin,
-            ['-s', serial, 'shell', 'run-as', pkg, 'ls', 'files'],
-            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }
-          );
-          for (const f of filesOut.split('\n').map((s) => s.trim())) {
-            if (f.endsWith('.realm')) {
-              discovered.push({
-                pkg,
-                remoteRelPath: `files/${f}`,
-                label: `${f}  (${pkg} • ${serial})`
-              });
-            }
-          }
-        } catch {
-          // package is not debuggable or has no files dir
-        }
-      }
-    } catch {
-      // ignore
-    }
+      const menu = new Menu();
+      const readyDevices = devices.filter((d) => d.state === 'device');
+      const blockedDevices = devices.filter((d) => d.state !== 'device');
 
-    if (discovered.length === 0) {
-      menu.append(
-        new MenuItem({
-          label: `Connected to ${serial}, but no debuggable .realm files found`,
-          enabled: false
-        })
-      );
-    } else {
-      menu.append(
-        new MenuItem({
-          label: `Android (${serial}) — click to pull & open:`,
-          enabled: false
-        })
-      );
-      menu.append(new MenuItem({ type: 'separator' }));
-      for (const item of discovered) {
+      if (devices.length === 0) {
         menu.append(
           new MenuItem({
-            label: item.label,
-            click: () => {
-              try {
-                const destDir = path.join(
-                  remote.app.getPath('temp'),
-                  'realm-studio-android',
-                  item.pkg
-                );
-                fs.ensureDirSync(destDir);
-                const destFile = path.join(
-                  destDir,
-                  path.basename(item.remoteRelPath)
-                );
-                const buf = execFileSync(
-                  adbBin,
-                  [
-                    '-s',
-                    serial,
-                    'exec-out',
-                    'run-as',
-                    item.pkg,
-                    'cat',
-                    item.remoteRelPath
-                  ],
-                  { maxBuffer: 200 * 1024 * 1024, timeout: 15000 }
-                );
-                fs.writeFileSync(destFile, buf);
-                void main
-                  .showOpenLocalRealmAtPath(destFile)
-                  .then(this.refreshRecentFiles);
-              } catch (err) {
-                showError('Failed pulling Realm file via ADB', err);
-              }
-            }
+            label: 'No running Android Emulator or connected ADB device found',
+            enabled: false
           })
         );
+      } else if (readyDevices.length === 0) {
+        for (const dev of blockedDevices) {
+          const hint =
+            dev.state === 'unauthorized'
+              ? 'Allow USB debugging on device'
+              : dev.state;
+          menu.append(
+            new MenuItem({
+              label: `${dev.model} (${dev.serial}): ${hint}`,
+              enabled: false
+            })
+          );
+        }
+      } else if (files.length === 0) {
+        const names = readyDevices.map((d) => d.model).join(', ');
+        menu.append(
+          new MenuItem({
+            label: `Scanned ${names} — no debuggable .realm files found`,
+            enabled: false
+          })
+        );
+      } else {
+        menu.append(
+          new MenuItem({
+            label: `Found ${files.length} Android Realm(s) — click to pull & open:`,
+            enabled: false
+          })
+        );
+        menu.append(new MenuItem({ type: 'separator' }));
+        for (const item of files.slice(0, 20)) {
+          const fileName = path.basename(item.remoteRelPath);
+          const parentFolder = path.dirname(item.remoteRelPath);
+          const devTag = `${item.isEmulator ? '[Emu] ' : ''}${item.deviceName}`;
+          const sizeLabel =
+            item.sizeBytes >= 1024 * 1024
+              ? `${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+              : `${(item.sizeBytes / 1024).toFixed(0)} KB`;
+          menu.append(
+            new MenuItem({
+              label: `${fileName} (${devTag} • ${sizeLabel} • ${item.pkg}/${parentFolder})`,
+              click: () => {
+                void this.handlePullAndroidFile(adbBin, item);
+              }
+            })
+          );
+        }
       }
+      menu.popup();
+    } catch (err) {
+      this.setState({ androidStatus: null });
+      showError('Failed scanning Android devices via ADB', err);
     }
-    menu.popup();
   };
 
   private onFindSimulatorRealms = () => {

@@ -32,6 +32,7 @@ import './Greeting.scss';
 const { app } = remote;
 
 export const Greeting = ({
+  androidStatus,
   historyEntries,
   isDraggingOver,
   onCheckForUpdates,
@@ -46,6 +47,7 @@ export const Greeting = ({
   updateStatus,
   version
 }: {
+  androidStatus?: string | null;
   historyEntries: IHistoryEntry[];
   isDraggingOver?: boolean;
   onCheckForUpdates: () => void;
@@ -135,12 +137,23 @@ export const Greeting = ({
             color="secondary"
             size="sm"
             className="Greeting__ActionBtn"
+            disabled={!!androidStatus}
             onClick={onFindAndroidRealms}
-            title="Pull .realm files from connected Android Emulator / ADB device"
+            title="Pull .realm files from connected Android physical devices or Emulators"
           >
-            <i className="fa fa-android" aria-hidden="true" /> Pull from Android
-            (ADB)
+            <i
+              className={
+                androidStatus ? 'fa fa-spinner fa-spin' : 'fa fa-android'
+              }
+              aria-hidden="true"
+            />{' '}
+            {androidStatus ? 'Working...' : 'Pull from Android (ADB)'}
           </Button>
+        ) : null}
+        {androidStatus ? (
+          <div className="small text-muted text-center mt-1">
+            {androidStatus}
+          </div>
         ) : null}
       </div>
 

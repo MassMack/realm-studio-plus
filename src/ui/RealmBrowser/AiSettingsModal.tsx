@@ -415,8 +415,9 @@ export const AiSettingsModal = ({
             </FormGroup>
 
             <div className="small text-muted">
-              <strong>Available Tools (6):</strong>{' '}
+              <strong>Available Tools (7):</strong>{' '}
               <code>list_simulator_realms</code>,{' '}
+              <code>list_android_realms</code>,{' '}
               <code>list_recent_realms</code>,{' '}
               <code>inspect_realm_overview</code>,{' '}
               <code>get_class_schema</code>, <code>query_realm</code>,{' '}
