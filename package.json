@@ -1,7 +1,7 @@
 {
   "name": "realm-studio-plus",
   "productName": "Realm Studio Plus",
-  "version": "20.4.0",
+  "version": "20.4.1",
   "description": "A tool for everything Realm!",
   "author": {
     "name": "Realm",
@@ -13,7 +13,8 @@
   "main": "./build/main.bundle.js",
   "build": {
     "appId": "com.realm.realm-studio-plus",
-    "compression": "maximum",
+    "compression": "normal",
+    "afterSign": "./scripts/after-sign-mac-adhoc.js",
     "artifactName": "${name}-${version}-${arch}.${ext}",
     "directories": {
       "buildResources": "./resources"
