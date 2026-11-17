@@ -23,7 +23,10 @@ Realm Studio Plus ensures that existing **Realm Studio** installations remain op
 - Feat: **Column Header Statistics & Actions** (`Min`, `Max`, `Sum`, `Average`, `Top Distinct Values`, `Copy Column Values`, `Hide Column`) and **Column Visibility Toggle (`Columns`)**
 - Feat: **Encryption Key Vault & Auto-Unlock** (remembers 128-hex encryption keys per path/filename and unlocks automatically)
 - Feat: **Database Overview, Storage & Schema Code Preview** (`TypeScript`, `Swift`, `Kotlin`, `JavaScript`, `C#`, `Java`), **`Compact Database`**, **`Quick Backup`**, **`Save Decrypted Copy`**, **`Save Encrypted Copy`**, and **`Reveal in Finder`**
-- Feat: **iOS Simulator `.realm` Auto-Finder**, **Android Emulator (ADB) `.realm` Puller**, **Drag & Drop File Open**, **Mock Data Generator (10/50/100 rows)**, and **Export Current View (JSON / CSV)**
+- Feat: **iOS Simulator `.realm` Auto-Finder**, **Android Emulator (ADB) `.realm` Puller & Auto-Sync**, **Drag & Drop File Open**, **Mock Data Generator (10/50/100 rows)**, and **Export Current View (JSON / CSV)**
+- Feat: **Unlimited Split View (`⌘\` / `⌘⇧\`)** with drag-to-dock / swap panes and high-performance memoized rendering
+- Feat: **Smart AI Assistant (`⌘⇧A`) & Optional Local AI (Ollama)** for cross-class ID lookup, RQL query generation, Schema Advisor, and Domain Knowledge Base
+- Feat: **Built-in Read-Only MCP Server** for inspecting live Realm databases from AI coding assistants
 
 This repository is actively maintained. That's because I'm the one using it :) We also actively incorporate your pull requests.
 
@@ -55,15 +58,15 @@ Visit https://docs.mongodb.com/realm/studio/ for more information on Realm Studi
 
 Click the links below to download the latest version of Realm Studio for
 
-https://github.com/jooy2/realm-studio-plus/releases
+https://github.com/MassMack/realm-studio-ultimate/releases
 
 ## Code of Conduct
 
-See [CODE_OF_CONDUCT.md](https://github.com/jooy2/realm-studio-plus/blob/master/docs/CODE_OF_CONDUCT.md) for more details
+See [CODE_OF_CONDUCT.md](https://github.com/MassMack/realm-studio-ultimate/blob/master/CODE_OF_CONDUCT.md) for more details
 
 ## Developing and contributing
 
-See [CONTRIBUTING.md](https://github.com/jooy2/realm-studio-plus/blob/master/docs/CONTRIBUTING.md) for more details!
+See [CONTRIBUTING.md](https://github.com/MassMack/realm-studio-ultimate/blob/master/docs/CONTRIBUTING.md) for more details!
 
 ## License
 

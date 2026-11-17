@@ -2,7 +2,7 @@
 
 ## Reporting Security Issues
 
-To report a security vulnerability, create an issue on GitHub on the "Open a draft security advisory" page on GitHub: https://github.com/jooy2/realm-studio-plus/security/advisories/new
+To report a security vulnerability, create an issue on GitHub on the "Open a draft security advisory" page on GitHub: https://github.com/MassMack/realm-studio-ultimate/security/advisories/new
 
 Also, send private instructions in advance via maintainer email. Do not submit vulnerability-related content as a general issue.
 

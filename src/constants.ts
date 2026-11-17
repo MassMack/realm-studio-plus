@@ -23,5 +23,5 @@ export const STUDIO_PROTOCOL = 'x-realm-studio';
 // `build.publish` in package.json: electron-updater reads the release metadata
 // from there and the updater falls back to the release page when it cannot.
 export const GITHUB_OWNER = 'MassMack';
-export const GITHUB_REPO = 'realm-studio-plus';
+export const GITHUB_REPO = 'realm-studio-ultimate';
 export const LATEST_RELEASE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;

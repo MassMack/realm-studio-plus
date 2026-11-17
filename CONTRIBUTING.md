@@ -6,7 +6,7 @@ This project adheres to the Contributor Covenant code of conduct. Your contribut
 
 ## Issues
 
-Issues can be created on the following page: https://github.com/jooy2/realm-studio-plus/issues
+Issues can be created on the following page: https://github.com/MassMack/realm-studio-ultimate/issues
 
 Alternatively, you can email the package maintainer. However, we prefer to track progress via GitHub Issues.
 
