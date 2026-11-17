@@ -35,6 +35,7 @@ import {
 import { store } from '../../../store';
 import { getRange } from '../../../utils';
 import { canUseJsonViewer } from '../../../utils/json';
+import { serializeRealmValue as serializeRealmToJson } from '../../../utils/realm-serialize';
 import { showError } from '../../reusable/errors';
 import { ILoadingProgress } from '../../reusable/LoadingOverlay';
 import { displayObject } from '../display';
@@ -821,75 +822,12 @@ class ContentContainer extends React.Component<
     };
   };
 
-  private serializeRealmValue(
-    val: unknown,
-    depth = 0,
-    seen = new WeakSet<object>()
-  ): unknown {
-    if (val === null || val === undefined) {
-      return null;
-    }
-    if (
-      typeof val === 'string' ||
-      typeof val === 'number' ||
-      typeof val === 'boolean'
-    ) {
-      return val;
-    }
-    if (val instanceof Date) {
-      return val.toISOString();
-    }
-    if (val instanceof ArrayBuffer) {
-      return Buffer.from(val).toString('base64');
-    }
-    if (
-      typeof (val as { toHexString?: unknown }).toHexString === 'function' ||
-      val instanceof Realm.BSON.ObjectId ||
-      val instanceof Realm.BSON.UUID ||
-      val instanceof Realm.BSON.Decimal128
-    ) {
-      return String(val);
-    }
-    if (typeof val === 'object') {
-      if (seen.has(val as object)) {
-        return '[Circular]';
-      }
-      if (depth > 2) {
-        return String(val);
-      }
-      seen.add(val as object);
-
-      if (
-        Array.isArray(val) ||
-        val instanceof Realm.List ||
-        val instanceof Realm.Set
-      ) {
-        return Array.from(val as Iterable<unknown>).map((item) =>
-          this.serializeRealmValue(item, depth + 1, seen)
-        );
-      }
-
-      if (typeof (val as Realm.Object).objectSchema === 'function') {
-        const realmObj = val as Realm.Object;
-        if (!realmObj.isValid()) {
-          return null;
-        }
-        const schema = realmObj.objectSchema();
-        const record = realmObj as unknown as Record<string, unknown>;
-        const out: Record<string, unknown> = {};
-        for (const key of Object.keys(schema.properties)) {
-          out[key] = this.serializeRealmValue(record[key], depth + 1, seen);
-        }
-        return out;
-      }
-
-      const plain: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-        plain[k] = this.serializeRealmValue(v, depth + 1, seen);
-      }
-      return plain;
-    }
-    return String(val);
+  private serializeRealmValue(val: unknown, depth = 0): unknown {
+    return serializeRealmToJson(
+      val,
+      { maxDepth: Math.max(0, 2 - depth) },
+      0
+    );
   }
 
   private buildRqlComparison(

@@ -694,7 +694,7 @@ class RealmBrowserContainer
       {
         id: 'action:ai-settings',
         category: 'AI',
-        label: 'AI Assistant Settings (Ollama / Gemini / OpenAI / Claude)...',
+        label: 'AI Assistant & MCP Server Settings (Copy MCP JSON)...',
         run: () => this.setState({ isAiSettingsOpen: true })
       },
       {

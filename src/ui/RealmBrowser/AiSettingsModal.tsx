@@ -16,11 +16,15 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
+import { execFileSync } from 'child_process';
+import * as remote from '@electron/remote';
+import path from 'path';
 import { useState } from 'react';
 import {
   Alert,
   Badge,
   Button,
+  ButtonGroup,
   FormGroup,
   Input,
   InputGroup,
@@ -60,17 +64,55 @@ const MODEL_SUGGESTIONS: Readonly<Record<AiProvider, string[]>> = {
   anthropic: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-latest']
 };
 
+function buildMcpConfigSnippet(): string {
+  let bundlePath = 'build/mcp.bundle.js';
+  try {
+    bundlePath = path.join(remote.app.getAppPath(), 'build', 'mcp.bundle.js');
+  } catch {
+    bundlePath = path.resolve(process.cwd(), 'build', 'mcp.bundle.js');
+  }
+
+  let nodeCommand = 'node';
+  try {
+    const resolved = execFileSync('which', ['node'], {
+      encoding: 'utf8',
+      timeout: 1000
+    }).trim();
+    if (resolved) {
+      nodeCommand = resolved;
+    }
+  } catch {
+    // fallback to 'node' on PATH
+  }
+
+  return JSON.stringify(
+    {
+      mcpServers: {
+        'realm-studio-plus': {
+          command: nodeCommand,
+          args: [bundlePath]
+        }
+      }
+    },
+    null,
+    2
+  );
+}
+
 export const AiSettingsModal = ({
   isOpen,
   toggle,
   onSaved
 }: IAiSettingsModalProps) => {
+  const [activeTab, setActiveTab] = useState<'ai' | 'mcp'>('ai');
   const [form, setForm] = useState<IAiSettings>(() => settings.getAiSettings());
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [isScanningOllama, setIsScanningOllama] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [copiedMcp, setCopiedMcp] = useState(false);
+  const [mcpConfigJson, setMcpConfigJson] = useState('');
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     message: string;
@@ -83,6 +125,8 @@ export const AiSettingsModal = ({
     setShowKey(false);
     setTestResult(null);
     setOllamaModels([]);
+    setCopiedMcp(false);
+    setMcpConfigJson(buildMcpConfigSnippet());
   };
 
   const handleProviderChange = (provider: AiProvider) => {
@@ -152,15 +196,36 @@ export const AiSettingsModal = ({
   return (
     <Modal isOpen={isOpen} toggle={toggle} onOpened={handleOpened} size="md">
       <ModalHeader toggle={toggle}>
-        <i className="fa fa-sliders" aria-hidden="true" /> AI Assistant Settings
+        <i className="fa fa-sliders" aria-hidden="true" /> AI Assistant &amp; MCP
+        Settings
       </ModalHeader>
       <ModalBody>
-        <Alert color="info" className="py-2 px-3 small mb-3">
-          <i className="fa fa-shield" aria-hidden="true" />{' '}
-          <strong>Privacy-by-Design:</strong> Only schema metadata (class &amp;
-          property names/types) is sent when generating queries. Your row data
-          never leaves your device.
-        </Alert>
+        <div className="mb-3">
+          <ButtonGroup size="sm">
+            <Button
+              color={activeTab === 'ai' ? 'primary' : 'secondary'}
+              onClick={() => setActiveTab('ai')}
+            >
+              <i className="fa fa-magic" aria-hidden="true" /> AI Provider
+            </Button>
+            <Button
+              color={activeTab === 'mcp' ? 'primary' : 'secondary'}
+              onClick={() => setActiveTab('mcp')}
+            >
+              <i className="fa fa-plug" aria-hidden="true" /> MCP Server
+              (Read-Only)
+            </Button>
+          </ButtonGroup>
+        </div>
+
+        {activeTab === 'ai' ? (
+          <>
+            <Alert color="info" className="py-2 px-3 small mb-3">
+              <i className="fa fa-shield" aria-hidden="true" />{' '}
+              <strong>Privacy-by-Design:</strong> Only schema metadata (class
+              &amp; property names/types) is sent when generating queries. Your
+              row data never leaves your device.
+            </Alert>
 
         <FormGroup>
           <Label for="ai-provider-select">AI Provider</Label>
@@ -307,24 +372,84 @@ export const AiSettingsModal = ({
             {testResult.message}
           </Alert>
         )}
+          </>
+        ) : (
+          <div>
+            <Alert color="info" className="py-2 px-3 small mb-3">
+              <i className="fa fa-lock" aria-hidden="true" />{' '}
+              <strong>Read-Only MCP Server (stdio):</strong> Allows Antigravity,
+              VS Code Copilot, Cursor, or Claude Desktop to inspect schemas,
+              scan iOS Simulators, and query Realm objects (sensitive fields
+              masked, max 50 rows/call).
+            </Alert>
+
+            <FormGroup>
+              <div className="d-flex justify-content-between align-items-center mb-1">
+                <Label className="mb-0">MCP Client Config (JSON)</Label>
+                <Button
+                  size="sm"
+                  color="primary"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(mcpConfigJson);
+                    setCopiedMcp(true);
+                    setTimeout(() => setCopiedMcp(false), 1500);
+                  }}
+                >
+                  <i
+                    className={`fa ${copiedMcp ? 'fa-check' : 'fa-copy'}`}
+                    aria-hidden="true"
+                  />{' '}
+                  {copiedMcp ? 'Copied!' : 'Copy Config'}
+                </Button>
+              </div>
+              <pre
+                style={{
+                  fontSize: '12px',
+                  maxHeight: '180px',
+                  overflow: 'auto',
+                  marginBottom: '12px'
+                }}
+              >
+                {mcpConfigJson}
+              </pre>
+            </FormGroup>
+
+            <div className="small text-muted">
+              <strong>Available Tools (6):</strong>{' '}
+              <code>list_simulator_realms</code>,{' '}
+              <code>list_recent_realms</code>,{' '}
+              <code>inspect_realm_overview</code>,{' '}
+              <code>get_class_schema</code>, <code>query_realm</code>,{' '}
+              <code>count_realm_objects</code>.
+            </div>
+          </div>
+        )}
       </ModalBody>
       <ModalFooter>
-        <Button
-          size="sm"
-          color="secondary"
-          onClick={handleTest}
-          disabled={isTesting}
-          className="mr-auto"
-        >
-          <i className="fa fa-plug" aria-hidden="true" />{' '}
-          {isTesting ? 'Testing...' : 'Test Connection'}
-        </Button>
-        <Button size="sm" color="secondary" onClick={toggle}>
-          Cancel
-        </Button>
-        <Button size="sm" color="primary" onClick={handleSave}>
-          Save Settings
-        </Button>
+        {activeTab === 'ai' ? (
+          <>
+            <Button
+              size="sm"
+              color="secondary"
+              onClick={handleTest}
+              disabled={isTesting}
+              className="mr-auto"
+            >
+              <i className="fa fa-plug" aria-hidden="true" />{' '}
+              {isTesting ? 'Testing...' : 'Test Connection'}
+            </Button>
+            <Button size="sm" color="secondary" onClick={toggle}>
+              Cancel
+            </Button>
+            <Button size="sm" color="primary" onClick={handleSave}>
+              Save Settings
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" color="secondary" onClick={toggle}>
+            Close
+          </Button>
+        )}
       </ModalFooter>
     </Modal>
   );

@@ -32,131 +32,15 @@ import {
   IRecentFile,
   removeRecentFile
 } from '../../services/recent-files';
+import {
+  findSimulatorRealmFiles,
+  getDefaultSimulatorRoot
+} from '../../services/simulator-finder';
 import { IMenuGeneratorProps } from '../../windows/MenuGenerator';
 import { showError } from '../reusable/errors';
 
 import { Greeting } from './Greeting';
 import { IHistoryEntry } from './HistoryPanel/HistoryEntry';
-
-interface ISimulatorRealmFile {
-  path: string;
-  mtimeMs: number;
-  size: number;
-  deviceUdid: string;
-}
-
-interface ISimulatorDeviceInfo {
-  name: string;
-  isBooted: boolean;
-}
-
-function getSimulatorDeviceMap(): Map<string, ISimulatorDeviceInfo> {
-  const map = new Map<string, ISimulatorDeviceInfo>();
-  try {
-    const raw = execFileSync('xcrun', ['simctl', 'list', 'devices', '-j'], {
-      encoding: 'utf8',
-      timeout: 2000
-    });
-    const parsed = JSON.parse(raw) as {
-      devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
-    };
-    if (parsed.devices) {
-      for (const list of Object.values(parsed.devices)) {
-        for (const dev of list) {
-          if (dev.udid && dev.name) {
-            map.set(dev.udid, {
-              name: dev.name,
-              isBooted: dev.state === 'Booted'
-            });
-          }
-        }
-      }
-    }
-  } catch {
-    // Fallback to UDID if xcrun is unavailable
-  }
-  return map;
-}
-
-const SKIP_SIM_DIRS = new Set([
-  'Caches',
-  'tmp',
-  'SplashBoard',
-  'Snapshots',
-  'SystemData',
-  'Bundle'
-]);
-
-function scanContainerForRealmFiles(
-  dir: string,
-  deviceUdid: string,
-  depth = 0,
-  maxDepth = 8,
-  acc: ISimulatorRealmFile[] = []
-): ISimulatorRealmFile[] {
-  if (depth > maxDepth || acc.length >= 100) {
-    return acc;
-  }
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return acc;
-  }
-  for (const entry of entries) {
-    if (
-      entry.name.startsWith('.') ||
-      entry.name.endsWith('.realm.management') ||
-      SKIP_SIM_DIRS.has(entry.name)
-    ) {
-      continue;
-    }
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      scanContainerForRealmFiles(fullPath, deviceUdid, depth + 1, maxDepth, acc);
-    } else if (entry.isFile() && entry.name.endsWith('.realm')) {
-      try {
-        const stat = fs.statSync(fullPath);
-        acc.push({
-          path: fullPath,
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-          deviceUdid
-        });
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return acc;
-}
-
-function findSimulatorRealmFiles(simRoot: string): ISimulatorRealmFile[] {
-  const acc: ISimulatorRealmFile[] = [];
-  let deviceEntries: fs.Dirent[] = [];
-  try {
-    deviceEntries = fs.readdirSync(simRoot, { withFileTypes: true });
-  } catch {
-    return acc;
-  }
-  for (const dev of deviceEntries) {
-    if (!dev.isDirectory() || dev.name.startsWith('.')) {
-      continue;
-    }
-    const deviceUdid = dev.name;
-    const containerRoots = [
-      path.join(simRoot, deviceUdid, 'data/Containers/Data/Application'),
-      path.join(simRoot, deviceUdid, 'data/Containers/Shared/AppGroup'),
-      path.join(simRoot, deviceUdid, 'data/Documents')
-    ];
-    for (const root of containerRoots) {
-      if (fs.existsSync(root)) {
-        scanContainerForRealmFiles(root, deviceUdid, 0, 8, acc);
-      }
-    }
-  }
-  return acc;
-}
 
 interface IGreetingContainerState {
   isDraggingOver: boolean;
@@ -410,10 +294,7 @@ class GreetingContainer extends React.Component<
   };
 
   private onFindSimulatorRealms = () => {
-    const simRoot = path.join(
-      os.homedir(),
-      'Library/Developer/CoreSimulator/Devices'
-    );
+    const simRoot = getDefaultSimulatorRoot();
     const { Menu, MenuItem } = remote;
     const menu = new Menu();
 
@@ -428,15 +309,7 @@ class GreetingContainer extends React.Component<
       return;
     }
 
-    const deviceMap = getSimulatorDeviceMap();
-    const found = findSimulatorRealmFiles(simRoot).sort((a, b) => {
-      const aBooted = deviceMap.get(a.deviceUdid)?.isBooted ? 1 : 0;
-      const bBooted = deviceMap.get(b.deviceUdid)?.isBooted ? 1 : 0;
-      if (aBooted !== bBooted) {
-        return bBooted - aBooted;
-      }
-      return b.mtimeMs - a.mtimeMs;
-    });
+    const found = findSimulatorRealmFiles(simRoot);
 
     if (found.length === 0) {
       menu.append(
@@ -456,10 +329,7 @@ class GreetingContainer extends React.Component<
       for (const item of found.slice(0, 15)) {
         const fileName = path.basename(item.path);
         const parentDir = path.basename(path.dirname(item.path));
-        const devInfo = deviceMap.get(item.deviceUdid);
-        const devLabel = devInfo
-          ? `${devInfo.isBooted ? '● ' : ''}${devInfo.name}`
-          : item.deviceUdid.slice(0, 8);
+        const devLabel = `${item.isBooted ? '● ' : ''}${item.deviceName}`;
         const kb = (item.size / 1024).toFixed(0);
         const timeStr = new Date(item.mtimeMs).toLocaleTimeString();
         menu.append(
