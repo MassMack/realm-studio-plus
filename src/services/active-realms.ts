@@ -31,7 +31,6 @@ export interface IActiveRealmSession {
   schemaVersion?: number;
   openedAt: number;
   focusedAt: number;
-  encryptionKeyHex?: string;
 }
 
 export interface IActiveRealmPublicInfo {
@@ -41,7 +40,6 @@ export interface IActiveRealmPublicInfo {
   schemaVersion: number | null;
   openedAt: string;
   focusedAt: string;
-  hasSessionKey: boolean;
   exists: boolean;
 }
 
@@ -95,6 +93,9 @@ function writeRawSessions(sessions: IActiveRealmSession[]) {
       JSON.stringify({ sessions }, null, 2),
       { mode: 0o600 }
     );
+    if (process.platform !== 'win32') {
+      fs.chmodSync(filePath, 0o600);
+    }
   } catch {
     // ignore
   }
@@ -105,7 +106,6 @@ export function registerOpenRealmSession(params: {
   path: string;
   activeClassName?: string;
   schemaVersion?: number;
-  encryptionKeyHex?: string;
 }) {
   const now = Date.now();
   const existing = readRawSessions().filter((s) => s.id !== params.id);
@@ -116,8 +116,7 @@ export function registerOpenRealmSession(params: {
     activeClassName: params.activeClassName,
     schemaVersion: params.schemaVersion,
     openedAt: now,
-    focusedAt: now,
-    encryptionKeyHex: params.encryptionKeyHex
+    focusedAt: now
   };
   writeRawSessions([next, ...existing]);
 }
@@ -127,7 +126,7 @@ export function updateOpenRealmSession(
   patch: Partial<
     Pick<
       IActiveRealmSession,
-      'activeClassName' | 'focusedAt' | 'schemaVersion' | 'encryptionKeyHex'
+      'activeClassName' | 'focusedAt' | 'schemaVersion'
     >
   >
 ) {
@@ -161,7 +160,6 @@ export function listActiveRealmsPublic(): IActiveRealmPublicInfo[] {
       typeof s.schemaVersion === 'number' ? s.schemaVersion : null,
     openedAt: new Date(s.openedAt).toISOString(),
     focusedAt: new Date(s.focusedAt).toISOString(),
-    hasSessionKey: !!s.encryptionKeyHex,
     exists: fs.existsSync(s.path)
   }));
 }

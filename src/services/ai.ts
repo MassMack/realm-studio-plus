@@ -16,6 +16,7 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
+import os from 'os';
 import Realm from 'realm';
 
 import { getRemote } from '../utils/electron-or-remote';
@@ -84,7 +85,13 @@ function writeStoredKeys(map: StoredKeyMap) {
   }
 }
 
+const sessionApiKeys: Partial<Record<AiProvider, string>> = {};
+
 export function getAiApiKey(provider: AiProvider): string {
+  const sessionKey = sessionApiKeys[provider];
+  if (sessionKey) {
+    return sessionKey;
+  }
   const entry = readStoredKeys()[provider];
   if (!entry || typeof entry.value !== 'string' || !entry.value) {
     return '';
@@ -100,25 +107,30 @@ export function getAiApiKey(provider: AiProvider): string {
     }
     return '';
   }
-  return entry.value;
+  return '';
 }
 
 export function setAiApiKey(provider: AiProvider, rawKey: string) {
   const trimmed = rawKey.trim();
   const map = readStoredKeys();
   if (!trimmed) {
+    delete sessionApiKeys[provider];
     delete map[provider];
     writeStoredKeys(map);
     return;
   }
   const ss = getSafeStorage();
   if (ss && ss.isEncryptionAvailable()) {
+    delete sessionApiKeys[provider];
     const encrypted = ss.encryptString(trimmed).toString('base64');
     map[provider] = { encrypted: true, value: encrypted };
+    writeStoredKeys(map);
   } else {
-    map[provider] = { encrypted: false, value: trimmed };
+    // Do not persist unencrypted API keys to localStorage; keep session-only in memory
+    sessionApiKeys[provider] = trimmed;
+    delete map[provider];
+    writeStoredKeys(map);
   }
-  writeStoredKeys(map);
 }
 
 export interface ISerializeSchemaOptions {
@@ -128,15 +140,28 @@ export interface ISerializeSchemaOptions {
   propertyHints?: IPropertyValueHint[];
 }
 
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === '127.0.0.1' ||
+    host === 'localhost' ||
+    host === '[::1]' ||
+    host === '::1'
+  );
+}
+
 export function isLocalAiEndpoint(config: IAiSettings): boolean {
-  if (config.provider === 'ollama') {
-    return true;
-  }
-  if (config.provider === 'openai') {
-    return (
-      config.openaiBaseUrl.includes('127.0.0.1') ||
-      config.openaiBaseUrl.includes('localhost')
-    );
+  try {
+    if (config.provider === 'ollama') {
+      const parsed = validateSafeHttpUrl(config.ollamaUrl);
+      return isLoopbackHostname(parsed.hostname);
+    }
+    if (config.provider === 'openai') {
+      const parsed = validateSafeHttpUrl(config.openaiBaseUrl);
+      return isLoopbackHostname(parsed.hostname);
+    }
+  } catch {
+    return false;
   }
   return false;
 }
@@ -340,7 +365,7 @@ export function serializeSchemaForAi(
   return lines.join('\n');
 }
 
-function createTimeoutSignal(
+export function createTimeoutSignal(
   timeoutMs: number,
   externalSignal?: AbortSignal
 ): { signal: AbortSignal; cleanup: () => void; didTimeout: () => boolean } {
@@ -373,34 +398,118 @@ function createTimeoutSignal(
   };
 }
 
-interface IChatMessage {
-  role: 'system' | 'user' | 'assistant';
+export interface IAiToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface IAiToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface IChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  name?: string;
+  toolCallId?: string;
+  toolCalls?: IAiToolCall[];
 }
 
-interface ICallProviderOptions {
+export interface ICallProviderOptions {
   responseFormat?: 'json';
+  tools?: IAiToolDefinition[];
 }
 
-function stripModelThinkTags(raw: string): string {
+export interface IProviderChatResult {
+  text: string;
+  toolCalls: IAiToolCall[];
+}
+
+export class ToolUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolUnsupportedError';
+  }
+}
+
+export function stripModelThinkTags(raw: string): string {
   return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-async function callAiProvider(
+function parseToolArguments(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore malformed JSON args
+    }
+  }
+  return {};
+}
+
+function safeToolResponseObject(content: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return { result: parsed };
+  } catch {
+    return { result: content };
+  }
+}
+
+export async function callAiProviderDetailed(
   config: IAiSettings,
   apiKey: string,
   messages: IChatMessage[],
   signal: AbortSignal,
   callOptions: ICallProviderOptions = {}
-): Promise<string> {
+): Promise<IProviderChatResult> {
   const systemText = messages
     .filter((m) => m.role === 'system')
     .map((m) => m.content)
     .join('\n\n');
   const conversationMessages = messages.filter((m) => m.role !== 'system');
+  const hasTools = Boolean(callOptions.tools && callOptions.tools.length > 0);
 
   switch (config.provider) {
     case 'ollama': {
+      const mappedMessages = messages.map((m) => {
+        if (m.role === 'tool') {
+          return {
+            role: 'tool',
+            tool_name: m.name || 'tool',
+            content: m.content
+          };
+        }
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          return {
+            role: 'assistant',
+            content: m.content || '',
+            tool_calls: m.toolCalls.map((tc, index) => ({
+              id: tc.id,
+              type: 'function',
+              function: {
+                index,
+                name: tc.name,
+                arguments: tc.arguments
+              }
+            }))
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       const body: Record<string, unknown> = {
         model: config.model,
         stream: false,
@@ -408,12 +517,23 @@ async function callAiProvider(
           temperature: 0.1,
           num_ctx: config.ollamaNumCtx
         },
-        messages: messages.map((m) => ({ role: m.role, content: m.content }))
+        messages: mappedMessages
       };
-      if (callOptions.responseFormat === 'json') {
+      if (hasTools && callOptions.tools) {
+        body.tools = callOptions.tools.map((t) => ({
+          type: 'function',
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters
+          }
+        }));
+      } else if (callOptions.responseFormat === 'json') {
         body.format = 'json';
       }
-      const res = await fetch(`${config.ollamaUrl}/api/chat`, {
+
+      const ollamaBase = validateSafeHttpUrl(config.ollamaUrl).origin;
+      const res = await fetch(`${ollamaBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal,
@@ -421,16 +541,44 @@ async function callAiProvider(
       });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
+        if (hasTools && /does not support tools|tool.*not support/i.test(text)) {
+          throw new ToolUnsupportedError(`Ollama (${res.status}): ${text}`);
+        }
         throw new Error(`Ollama error (${res.status}): ${text}`);
       }
       const data = (await res.json()) as {
-        message?: { content?: string };
+        message?: {
+          content?: string;
+          tool_calls?: Array<{
+            id?: string;
+            function?: { name?: string; arguments?: unknown };
+          }>;
+        };
         error?: string;
       };
       if (data.error) {
         throw new Error(data.error);
       }
-      return data.message?.content?.trim() || '';
+      const rawCalls = Array.isArray(data.message?.tool_calls)
+        ? data.message!.tool_calls
+        : [];
+      const toolCalls: IAiToolCall[] = rawCalls
+        .map((tc, idx) => {
+          const fn = tc?.function;
+          if (!fn || typeof fn.name !== 'string' || !fn.name.trim()) {
+            return null;
+          }
+          return {
+            id: tc.id || `ollama_call_${idx + 1}`,
+            name: fn.name.trim(),
+            arguments: parseToolArguments(fn.arguments)
+          };
+        })
+        .filter((x): x is IAiToolCall => x !== null);
+      return {
+        text: data.message?.content?.trim() || '',
+        toolCalls
+      };
     }
 
     case 'gemini': {
@@ -441,36 +589,110 @@ async function callAiProvider(
       }
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
         config.model
-      )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      )}:generateContent`;
       const generationConfig: Record<string, unknown> = { temperature: 0.1 };
-      if (callOptions.responseFormat === 'json') {
+      if (!hasTools && callOptions.responseFormat === 'json') {
         generationConfig.responseMimeType = 'application/json';
       }
+      const geminiContents = conversationMessages.map((m) => {
+        if (m.role === 'tool') {
+          return {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  name: m.name || 'tool',
+                  response: safeToolResponseObject(m.content)
+                }
+              }
+            ]
+          };
+        }
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          const parts: Array<Record<string, unknown>> = [];
+          if (m.content) {
+            parts.push({ text: m.content });
+          }
+          for (const tc of m.toolCalls) {
+            parts.push({
+              functionCall: {
+                name: tc.name,
+                args: tc.arguments
+              }
+            });
+          }
+          return { role: 'model', parts };
+        }
+        return {
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.content }]
+        };
+      });
+
+      const payload: Record<string, unknown> = {
+        systemInstruction: systemText
+          ? { parts: [{ text: systemText }] }
+          : undefined,
+        contents: geminiContents,
+        generationConfig
+      };
+      if (hasTools && callOptions.tools) {
+        payload.tools = [
+          {
+            functionDeclarations: callOptions.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters
+            }))
+          }
+        ];
+      }
+
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
         signal,
-        body: JSON.stringify({
-          systemInstruction: systemText
-            ? { parts: [{ text: systemText }] }
-            : undefined,
-          contents: conversationMessages.map((m) => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }]
-          })),
-          generationConfig
-        })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
+        if (hasTools && /function|tool.*not support/i.test(text)) {
+          throw new ToolUnsupportedError(`Gemini (${res.status}): ${text}`);
+        }
         throw new Error(`Gemini error (${res.status}): ${text}`);
       }
       const data = (await res.json()) as {
         candidates?: Array<{
-          content?: { parts?: Array<{ text?: string }> };
+          content?: {
+            parts?: Array<{
+              text?: string;
+              functionCall?: { name?: string; args?: Record<string, unknown> };
+            }>;
+          };
         }>;
       };
-      return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const textParts: string[] = [];
+      const toolCalls: IAiToolCall[] = [];
+      for (const part of parts) {
+        if (typeof part.text === 'string' && part.text.trim()) {
+          textParts.push(part.text.trim());
+        }
+        if (part.functionCall && typeof part.functionCall.name === 'string') {
+          toolCalls.push({
+            id: `gemini_call_${toolCalls.length + 1}`,
+            name: part.functionCall.name,
+            arguments: parseToolArguments(part.functionCall.args)
+          });
+        }
+      }
+      return {
+        text: textParts.join('\n').trim(),
+        toolCalls
+      };
     }
 
     case 'openai': {
@@ -486,24 +708,105 @@ async function callAiProvider(
       if (apiKey) {
         headers.Authorization = `Bearer ${apiKey}`;
       }
-      const res = await fetch(`${config.openaiBaseUrl}/chat/completions`, {
+      const mappedMessages = messages.map((m) => {
+        if (m.role === 'tool') {
+          return {
+            role: 'tool',
+            tool_call_id: m.toolCallId || m.name || 'call_1',
+            content: m.content
+          };
+        }
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          return {
+            role: 'assistant',
+            content: m.content || null,
+            tool_calls: m.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function',
+              function: {
+                name: tc.name,
+                arguments: JSON.stringify(tc.arguments)
+              }
+            }))
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
+      const body: Record<string, unknown> = {
+        model: config.model,
+        temperature: 0.1,
+        messages: mappedMessages
+      };
+      if (hasTools && callOptions.tools) {
+        body.tools = callOptions.tools.map((t) => ({
+          type: 'function',
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters
+          }
+        }));
+        body.tool_choice = 'auto';
+      } else if (callOptions.responseFormat === 'json') {
+        body.response_format = { type: 'json_object' };
+      }
+
+      const parsedOpenAi = validateSafeHttpUrl(config.openaiBaseUrl);
+      if (
+        !isLoopbackHostname(parsedOpenAi.hostname) &&
+        parsedOpenAi.protocol !== 'https:'
+      ) {
+        throw new Error(
+          'Remote OpenAI-compatible endpoints must use https:// to protect your API key and schema.'
+        );
+      }
+      const openaiBase = `${parsedOpenAi.origin}${parsedOpenAi.pathname}`.replace(
+        /\/+$/,
+        ''
+      );
+      const res = await fetch(`${openaiBase}/chat/completions`, {
         method: 'POST',
         headers,
         signal,
-        body: JSON.stringify({
-          model: config.model,
-          temperature: 0.1,
-          messages: messages.map((m) => ({ role: m.role, content: m.content }))
-        })
+        body: JSON.stringify(body)
       });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
+        if (hasTools && /does not support tools|tool.*not support/i.test(text)) {
+          throw new ToolUnsupportedError(`OpenAI (${res.status}): ${text}`);
+        }
         throw new Error(`OpenAI error (${res.status}): ${text}`);
       }
       const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: Array<{
+              id?: string;
+              function?: { name?: string; arguments?: unknown };
+            }>;
+          };
+        }>;
       };
-      return data.choices?.[0]?.message?.content?.trim() || '';
+      const msg = data.choices?.[0]?.message;
+      const rawCalls = Array.isArray(msg?.tool_calls) ? msg!.tool_calls : [];
+      const toolCalls: IAiToolCall[] = rawCalls
+        .map((tc, idx) => {
+          const fn = tc?.function;
+          if (!fn || typeof fn.name !== 'string' || !fn.name.trim()) {
+            return null;
+          }
+          return {
+            id: tc.id || `openai_call_${idx + 1}`,
+            name: fn.name.trim(),
+            arguments: parseToolArguments(fn.arguments)
+          };
+        })
+        .filter((x): x is IAiToolCall => x !== null);
+      return {
+        text: typeof msg?.content === 'string' ? msg.content.trim() : '',
+        toolCalls
+      };
     }
 
     case 'anthropic': {
@@ -512,6 +815,54 @@ async function callAiProvider(
           'Anthropic API key is missing. Please add it in AI Settings.'
         );
       }
+      const mappedMessages = conversationMessages.map((m) => {
+        if (m.role === 'tool') {
+          return {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: m.toolCallId || 'tool_1',
+                content: m.content
+              }
+            ]
+          };
+        }
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          const blocks: Array<Record<string, unknown>> = [];
+          if (m.content) {
+            blocks.push({ type: 'text', text: m.content });
+          }
+          for (const tc of m.toolCalls) {
+            blocks.push({
+              type: 'tool_use',
+              id: tc.id,
+              name: tc.name,
+              input: tc.arguments
+            });
+          }
+          return { role: 'assistant', content: blocks };
+        }
+        return {
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content
+        };
+      });
+      const body: Record<string, unknown> = {
+        model: config.model,
+        max_tokens: 1536,
+        temperature: 0.1,
+        system: systemText || undefined,
+        messages: mappedMessages
+      };
+      if (hasTools && callOptions.tools) {
+        body.tools = callOptions.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.parameters
+        }));
+      }
+
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -520,27 +871,311 @@ async function callAiProvider(
           'anthropic-version': '2023-06-01'
         },
         signal,
-        body: JSON.stringify({
-          model: config.model,
-          max_tokens: 1024,
-          temperature: 0.1,
-          system: systemText || undefined,
-          messages: conversationMessages.map((m) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content
-          }))
-        })
+        body: JSON.stringify(body)
       });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
+        if (hasTools && /tool.*not support/i.test(text)) {
+          throw new ToolUnsupportedError(`Anthropic (${res.status}): ${text}`);
+        }
         throw new Error(`Anthropic error (${res.status}): ${text}`);
       }
       const data = (await res.json()) as {
-        content?: Array<{ type?: string; text?: string }>;
+        content?: Array<{
+          type?: string;
+          id?: string;
+          name?: string;
+          text?: string;
+          input?: Record<string, unknown>;
+        }>;
       };
-      return (
-        data.content?.find((c) => c.type === 'text')?.text?.trim() || ''
+      const blocks = data.content || [];
+      const textParts: string[] = [];
+      const toolCalls: IAiToolCall[] = [];
+      for (const b of blocks) {
+        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          textParts.push(b.text.trim());
+        } else if (b.type === 'tool_use' && typeof b.name === 'string') {
+          toolCalls.push({
+            id: b.id || `anthropic_call_${toolCalls.length + 1}`,
+            name: b.name,
+            arguments: parseToolArguments(b.input)
+          });
+        }
+      }
+      return {
+        text: textParts.join('\n').trim(),
+        toolCalls
+      };
+    }
+  }
+}
+
+async function callAiProvider(
+  config: IAiSettings,
+  apiKey: string,
+  messages: IChatMessage[],
+  signal: AbortSignal,
+  callOptions: ICallProviderOptions = {}
+): Promise<string> {
+  const result = await callAiProviderDetailed(
+    config,
+    apiKey,
+    messages,
+    signal,
+    callOptions
+  );
+  return result.text;
+}
+
+const SAFE_OLLAMA_MODEL_TAG_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,120}$/;
+
+export interface ILocalModelPreset {
+  tag: string;
+  label: string;
+  approxSizeGb: string;
+  minRamGb: number;
+  recommended: boolean;
+  note: string;
+}
+
+export const LOCAL_MODEL_PRESETS: readonly ILocalModelPreset[] = [
+  {
+    tag: 'qwen3.5:9b',
+    label: 'Qwen 3.5 · 9B',
+    approxSizeGb: '~6.6 GB',
+    minRamGb: 12,
+    recommended: true,
+    note: 'Newest balanced model for Thai/English reasoning, ID search & RQL (16 GB+ RAM).'
+  },
+  {
+    tag: 'qwen3:8b',
+    label: 'Qwen 3 · 8B',
+    approxSizeGb: '~5.2 GB',
+    minRamGb: 12,
+    recommended: false,
+    note: 'Fast tool calling & Q&A with lower memory usage.'
+  },
+  {
+    tag: 'qwen3.5:4b',
+    label: 'Qwen 3.5 · 4B (Light)',
+    approxSizeGb: '~3.4 GB',
+    minRamGb: 8,
+    recommended: false,
+    note: 'Compact download for 8 GB RAM laptops.'
+  },
+  {
+    tag: 'qwen3:14b',
+    label: 'Qwen 3 · 14B (High Accuracy)',
+    approxSizeGb: '~9.3 GB',
+    minRamGb: 24,
+    recommended: false,
+    note: 'Stronger multi-step reasoning for 24–32 GB+ RAM Macs.'
+  },
+  {
+    tag: 'qwen2.5:7b',
+    label: 'Qwen 2.5 · 7B (Classic)',
+    approxSizeGb: '~4.7 GB',
+    minRamGb: 12,
+    recommended: false,
+    note: 'Classic baseline Qwen 2.5 model.'
+  }
+];
+
+export function getSystemRamGb(): number {
+  try {
+    const bytes = os.totalmem();
+    if (Number.isFinite(bytes) && bytes > 0) {
+      return Math.round(bytes / (1024 * 1024 * 1024));
+    }
+  } catch {
+    // ignore outside Node/Electron
+  }
+  return 16;
+}
+
+export function getLocalModelRecommendation(): {
+  ramGb: number;
+  recommendedTag: string;
+  presets: ILocalModelPreset[];
+} {
+  const ramGb = getSystemRamGb();
+  const recommendedTag =
+    ramGb < 12 ? 'qwen3.5:4b' : ramGb >= 24 ? 'qwen3:14b' : 'qwen3.5:9b';
+  return {
+    ramGb,
+    recommendedTag,
+    presets: LOCAL_MODEL_PRESETS.map((p) => ({
+      ...p,
+      recommended: p.tag === recommendedTag
+    }))
+  };
+}
+
+export function validateSafeHttpUrl(
+  rawUrl: string,
+  options: { localHostOnly?: boolean } = {}
+): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error('Invalid endpoint URL.');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Blocked unsafe URL scheme "${parsed.protocol}". Only http and https are allowed.`
+    );
+  }
+  if (options.localHostOnly) {
+    const host = parsed.hostname.toLowerCase();
+    const isLocalHost =
+      host === '127.0.0.1' ||
+      host === 'localhost' ||
+      host === '[::1]' ||
+      host === '::1';
+    if (!isLocalHost) {
+      throw new Error(
+        `Refused non-local model download target "${parsed.hostname}". Model downloads are restricted to localhost/127.0.0.1 for security.`
       );
+    }
+  }
+  return parsed;
+}
+
+export function isValidOllamaModelTag(tag: string): boolean {
+  const trimmed = tag.trim();
+  return (
+    SAFE_OLLAMA_MODEL_TAG_REGEX.test(trimmed) &&
+    !trimmed.includes('..') &&
+    !trimmed.startsWith('/')
+  );
+}
+
+export function isOllamaModelInstalled(
+  installedTags: string[],
+  targetModel: string
+): boolean {
+  const target = targetModel.trim().toLowerCase();
+  if (!target) {
+    return false;
+  }
+  const targetHasTag = target.includes(':');
+  return installedTags.some((item) => {
+    const lower = item.toLowerCase();
+    if (lower === target) {
+      return true;
+    }
+    if (!targetHasTag && lower === `${target}:latest`) {
+      return true;
+    }
+    if (target.endsWith(':latest') && lower === target.slice(0, -':latest'.length)) {
+      return true;
+    }
+    return false;
+  });
+}
+
+export interface IOllamaPullProgress {
+  status: string;
+  completedBytes?: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
+export async function pullOllamaModel(params: {
+  ollamaUrl: string;
+  model: string;
+  signal?: AbortSignal;
+  onProgress?: (progress: IOllamaPullProgress) => void;
+}): Promise<void> {
+  const parsedUrl = validateSafeHttpUrl(params.ollamaUrl, {
+    localHostOnly: true
+  });
+  const modelTag = params.model.trim();
+  if (!isValidOllamaModelTag(modelTag)) {
+    throw new Error(`Invalid Ollama model tag "${params.model}".`);
+  }
+
+  const res = await fetch(`${parsedUrl.origin}/api/pull`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    redirect: 'error',
+    signal: params.signal,
+    body: JSON.stringify({ model: modelTag, stream: true })
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`Ollama pull failed (${res.status}): ${text}`);
+  }
+
+  const MAX_STREAM_LINE_CHARS = 1024 * 1024;
+  const handleLine = (line: string) => {
+    const clean = line.trim();
+    if (!clean || clean.length > MAX_STREAM_LINE_CHARS) {
+      return;
+    }
+    let obj: {
+      status?: unknown;
+      completed?: unknown;
+      total?: unknown;
+      error?: unknown;
+    };
+    try {
+      obj = JSON.parse(clean);
+    } catch {
+      return;
+    }
+    if (typeof obj.error === 'string' && obj.error) {
+      throw new Error(obj.error);
+    }
+    const status = typeof obj.status === 'string' ? obj.status : 'Downloading...';
+    const completedBytes =
+      typeof obj.completed === 'number' && Number.isFinite(obj.completed)
+        ? obj.completed
+        : undefined;
+    const totalBytes =
+      typeof obj.total === 'number' &&
+      Number.isFinite(obj.total) &&
+      obj.total > 0
+        ? obj.total
+        : undefined;
+    const percent =
+      completedBytes !== undefined && totalBytes !== undefined
+        ? Math.min(100, Math.max(0, Math.round((completedBytes / totalBytes) * 100)))
+        : status === 'success'
+          ? 100
+          : undefined;
+    params.onProgress?.({ status, completedBytes, totalBytes, percent });
+  };
+
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_STREAM_LINE_CHARS) {
+        throw new Error('Ollama progress stream line exceeded safe buffer limit.');
+      }
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        handleLine(line);
+      }
+    }
+    if (buffer.trim()) {
+      handleLine(buffer);
+    }
+  } else {
+    const fullText = await res.text();
+    for (const line of fullText.split('\n')) {
+      handleLine(line);
     }
   }
 }
@@ -549,7 +1184,7 @@ export async function listOllamaModels(
   ollamaUrl: string,
   externalSignal?: AbortSignal
 ): Promise<string[]> {
-  const base = ollamaUrl.trim().replace(/\/+$/, '');
+  const base = validateSafeHttpUrl(ollamaUrl).origin;
   const { signal, cleanup } = createTimeoutSignal(5000, externalSignal);
   try {
     const res = await fetch(`${base}/api/tags`, { signal });
@@ -684,7 +1319,7 @@ export function parseGeneratedQueryResponse(
   };
 }
 
-function buildKnowledgeBasePromptSection(
+export function buildKnowledgeBasePromptSection(
   kbCtx: ReturnType<typeof retrieveRelevantKbContext>
 ): string {
   const sections: string[] = [];
@@ -712,7 +1347,7 @@ function buildKnowledgeBasePromptSection(
   return sections.join('\n\n');
 }
 
-function collectObjectCountsFromRealm(
+export function collectObjectCountsFromRealm(
   realm: Realm | undefined,
   classes: Realm.ObjectSchema[]
 ): Record<string, number> | undefined {
@@ -750,17 +1385,18 @@ export async function generateRealmQuery(params: {
     params.classes,
     params.kbOverrideDir
   );
+  const isLocal = isLocalAiEndpoint(config);
   const kbCtx = retrieveRelevantKbContext({
     kb,
     prompt: params.prompt,
     activeClassName: params.activeClassName,
-    classes: params.classes
+    classes: params.classes,
+    includeCodeSnippets: isLocal,
+    includeQueryHistory: isLocal
   });
 
   const canUseLocalHints =
-    !!params.realm &&
-    config.enableLocalDataHints &&
-    isLocalAiEndpoint(config);
+    !!params.realm && config.enableLocalDataHints && isLocal;
   const propertyHints =
     canUseLocalHints && params.realm
       ? sampleSafePropertyHints(params.realm, params.activeClassName)

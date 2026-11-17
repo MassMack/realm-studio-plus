@@ -39,7 +39,7 @@ import { serializeRealmValue as serializeRealmToJson } from '../../../utils/real
 import { showError } from '../../reusable/errors';
 import { ILoadingProgress } from '../../reusable/LoadingOverlay';
 import { displayObject } from '../display';
-import { Focus, getClassName, IClassFocus } from '../focus';
+import { Focus, generateKey, getClassName, IClassFocus } from '../focus';
 import { isPrimitive } from '../primitives';
 
 import { Content, IContentProps } from './Content';
@@ -124,6 +124,8 @@ export interface IBaseContentContainerProps {
   editMode: EditMode;
   focus: Focus;
   highlightMode: HighlightMode;
+  isActivePane?: boolean;
+  paneId?: string;
   onAskAi?: () => void;
   onCellClick?: CellClickHandler;
   onCellDoubleClick?: CellClickHandler;
@@ -173,19 +175,59 @@ export interface IContentContainerState {
   sorting?: ISorting;
 }
 
-class ContentContainer extends React.Component<
+interface IPaneUiCacheEntry {
+  focusKey: string;
+  query: string;
+  sorting?: ISorting;
+  hiddenColumns: string[];
+}
+
+class ContentContainer extends React.PureComponent<
   IContentContainerProps,
   IContentContainerState
 > {
-  // TODO: Reset sorting, highlight and filtering (and scroll) when focus change
+  private static paneUiCache = new Map<string, IPaneUiCacheEntry>();
+
+  public static clearPaneCache(paneId?: string) {
+    if (paneId) {
+      ContentContainer.paneUiCache.delete(paneId);
+    } else {
+      ContentContainer.paneUiCache.clear();
+    }
+  }
+
+  private getInitialPaneUiState(): Pick<
+    IContentContainerState,
+    'query' | 'sorting' | 'hiddenColumns'
+  > {
+    if (this.props.paneId && this.props.focus) {
+      const cached = ContentContainer.paneUiCache.get(this.props.paneId);
+      const focusKey = generateKey(this.props.focus);
+      if (cached && cached.focusKey === focusKey) {
+        return {
+          query: cached.query,
+          sorting: cached.sorting,
+          hiddenColumns: cached.hiddenColumns
+        };
+      }
+    }
+    return {
+      query: '',
+      sorting: undefined,
+      hiddenColumns: []
+    };
+  }
+
+  private initialUi = this.getInitialPaneUiState();
 
   public state: IContentContainerState = {
     createObjectDialog: { isOpen: false },
     deleteObjectsDialog: { isOpen: false },
-    hiddenColumns: [],
+    hiddenColumns: this.initialUi.hiddenColumns,
     hideSystemClasses: !store.shouldShowSystemClasses(),
-    query: '',
-    selectObjectDialog: { isOpen: false }
+    query: this.initialUi.query,
+    selectObjectDialog: { isOpen: false },
+    sorting: this.initialUi.sorting
   };
 
   public latestCellValidation?: {
@@ -379,6 +421,18 @@ class ContentContainer extends React.Component<
     );
   }
 
+  private persistPaneUiState(next?: Partial<IPaneUiCacheEntry>) {
+    if (!this.props.paneId || !this.props.focus) {
+      return;
+    }
+    ContentContainer.paneUiCache.set(this.props.paneId, {
+      focusKey: generateKey(this.props.focus),
+      query: next?.query ?? this.state.query,
+      sorting: next && 'sorting' in next ? next.sorting : this.state.sorting,
+      hiddenColumns: next?.hiddenColumns ?? this.state.hiddenColumns
+    });
+  }
+
   public componentDidMount() {
     document.addEventListener('keydown', this.onDocumentKeyDown);
   }
@@ -434,6 +488,7 @@ class ContentContainer extends React.Component<
       focus,
       hiddenColumns: this.state.hiddenColumns,
       highlight: this.state.highlight,
+      isActivePane: this.props.isActivePane ?? true,
       onAskAi: this.props.onAskAi,
       onCellChange: this.onCellChange,
       onCellClick: this.onCellClick,
@@ -511,6 +566,7 @@ class ContentContainer extends React.Component<
   };
 
   private onQueryChange = (query: string) => {
+    this.persistPaneUiState({ query });
     this.setState({ query });
   };
 
@@ -621,6 +677,7 @@ class ContentContainer extends React.Component<
   };
 
   private onSortingChange: SortingChangeHandler = (sorting) => {
+    this.persistPaneUiState({ sorting });
     this.setState({ sorting });
   };
 
@@ -630,11 +687,13 @@ class ContentContainer extends React.Component<
       const next = exists
         ? prev.hiddenColumns.filter((c) => c !== propName)
         : [...prev.hiddenColumns, propName];
+      this.persistPaneUiState({ hiddenColumns: next });
       return { hiddenColumns: next };
     });
   };
 
   private onShowAllColumns = () => {
+    this.persistPaneUiState({ hiddenColumns: [] });
     this.setState({ hiddenColumns: [] });
   };
 
@@ -896,10 +955,14 @@ class ContentContainer extends React.Component<
           }
           const out: Record<string, string | number | boolean | null> = {};
           for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
-            out[k] =
+            const rawVal =
               v !== null && typeof v === 'object'
                 ? JSON.stringify(v)
                 : (v as string | number | boolean | null);
+            out[k] =
+              typeof rawVal === 'string' && /^[=+\-@\t\r]/.test(rawVal)
+                ? `'${rawVal}`
+                : rawVal;
           }
           return out;
         });
@@ -2299,7 +2362,11 @@ class ContentContainer extends React.Component<
   };
 
   private onDocumentKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || !this.state.highlight) {
+    if (
+      this.props.isActivePane === false ||
+      e.key !== 'Escape' ||
+      !this.state.highlight
+    ) {
       return;
     }
     // Don't steal Escape from inputs (cell editors, search, dialogs)

@@ -207,6 +207,30 @@ export class WindowManager {
     });
     window.loadURL(rendererUrl);
 
+    // Block in-window navigation or webview attachment outside our bundled renderer entry
+    const expectedRendererPath = getRendererHtmlPath();
+    window.webContents.on('will-navigate', (event, targetUrl) => {
+      try {
+        const parsed = new URL(targetUrl);
+        const isDevServer =
+          isDevelopment &&
+          parsed.protocol === 'http:' &&
+          parsed.hostname === 'localhost';
+        const isLocalBundle =
+          parsed.protocol === 'file:' &&
+          path.resolve(decodeURIComponent(parsed.pathname)) ===
+            path.resolve(expectedRendererPath);
+        if (!isDevServer && !isLocalBundle) {
+          event.preventDefault();
+        }
+      } catch {
+        event.preventDefault();
+      }
+    });
+    window.webContents.on('will-attach-webview', (event) => {
+      event.preventDefault();
+    });
+
     // Recover from native renderer crashes (e.g. encrypted Realm HMAC
     // failure when another process writes to the file — see
     // https://github.com/realm/realm-js/issues/7084) by re-navigating to the
@@ -322,14 +346,17 @@ export class WindowManager {
       event.preventDefault();
     });
 
-    // Open all links in the external browser
+    // Open all external http/https links in the default browser; block unexpected protocols
     window.webContents.setWindowOpenHandler((details) => {
-      if (details.url.indexOf('http') === 0) {
-        shell.openExternal(details.url);
-        return { action: 'deny' };
-      } else {
-        return { action: 'allow' };
+      try {
+        const parsed = new URL(details.url);
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+          void shell.openExternal(parsed.toString());
+        }
+      } catch {
+        // ignore invalid URLs
       }
+      return { action: 'deny' };
     });
 
     // When the window is about to close, save its size, position and maximized state for the next of its type

@@ -355,7 +355,7 @@ export function createRealmMcpServer(version = '20.3.0'): McpServer {
           .boolean()
           .optional()
           .describe(
-            'Set true only if you explicitly need unmasked token/password/secret fields (default false).'
+            'Set true only when REALM_MCP_ALLOW_SENSITIVE=1 is enabled in the MCP server environment (default false).'
           ),
         encryptionKeyHex: z
           .string()
@@ -364,7 +364,13 @@ export function createRealmMcpServer(version = '20.3.0'): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS
     },
-    wrapReadOnly((args) => queryRealmObjects(args))
+    wrapReadOnly((args) => {
+      const allowSensitive = process.env.REALM_MCP_ALLOW_SENSITIVE === '1';
+      return queryRealmObjects({
+        ...args,
+        includeSensitiveFields: allowSensitive && Boolean(args.includeSensitiveFields)
+      });
+    })
   );
 
   server.registerTool(

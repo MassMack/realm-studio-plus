@@ -35,14 +35,33 @@ const environment = isDevelopment ? 'development' : 'production';
 export const IPC_SEND_EVENT_ID = 'sentry.send-event-id';
 export const IPC_EVENT_ID = 'sentry.event-id';
 
+function scrubSensitiveText(text: string): string {
+  return text
+    .replace(/\/Users\/[^/\s]+/g, '/Users/<redacted>')
+    .replace(/\/home\/[^/\s]+/g, '/home/<redacted>')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, 'C:\\Users\\<redacted>')
+    .replace(/\b[a-fA-F0-9]{128}\b/g, '<redacted-hex-key>')
+    .replace(/\bkey=[A-Za-z0-9_-]+/gi, 'key=<redacted>');
+}
+
 if (process.type === 'renderer') {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Sentry: typeof RendererSentryNS = require('@sentry/electron/renderer');
   Sentry.init({
     dsn,
     environment,
+    enabled: process.env.REALM_STUDIO_ENABLE_SENTRY === 'true',
     // Don't use the default integrations when developing (prevents overrides of console.log)
-    defaultIntegrations: isDevelopment ? false : undefined
+    defaultIntegrations: isDevelopment ? false : undefined,
+    beforeBreadcrumb: (breadcrumb) => {
+      if (breadcrumb.message) {
+        breadcrumb.message = scrubSensitiveText(breadcrumb.message);
+      }
+      if (breadcrumb.data && typeof breadcrumb.data.title === 'string') {
+        breadcrumb.data.title = scrubSensitiveText(breadcrumb.data.title);
+      }
+      return breadcrumb;
+    }
   });
 } else {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -51,9 +70,22 @@ if (process.type === 'renderer') {
   Sentry.init({
     dsn,
     environment,
+    enabled: process.env.REALM_STUDIO_ENABLE_SENTRY === 'true',
     // Don't use the default integrations when developing (prevents overrides of console.log)
     defaultIntegrations: isDevelopment ? false : undefined,
+    beforeBreadcrumb: (breadcrumb) => {
+      if (breadcrumb.message) {
+        breadcrumb.message = scrubSensitiveText(breadcrumb.message);
+      }
+      if (breadcrumb.data && typeof breadcrumb.data.title === 'string') {
+        breadcrumb.data.title = scrubSensitiveText(breadcrumb.data.title);
+      }
+      return breadcrumb;
+    },
     beforeSend: (event) => {
+      if (event.message) {
+        event.message = scrubSensitiveText(event.message);
+      }
       // Iterate through the windows waiting for an event id
       for (const webContents of listeners) {
         webContents.send(IPC_EVENT_ID, { id: event.event_id });

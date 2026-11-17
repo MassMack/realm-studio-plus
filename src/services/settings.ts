@@ -54,7 +54,7 @@ export const AI_PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
 };
 
 export const DEFAULT_AI_MODELS: Readonly<Record<AiProvider, string>> = {
-  ollama: 'qwen2.5:7b',
+  ollama: 'qwen3.5:9b',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   anthropic: 'claude-sonnet-4-20250514'
@@ -121,6 +121,22 @@ export function isAiProvider(value: unknown): value is AiProvider {
   return AI_PROVIDERS.includes(value as AiProvider);
 }
 
+function sanitizeHttpEndpoint(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return fallback;
+  }
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return trimmed;
+    }
+  } catch {
+    // fallback if invalid URL
+  }
+  return fallback;
+}
+
 function normalizeAiSettings(raw: unknown): IAiSettings {
   const obj =
     raw && typeof raw === 'object' ? (raw as Partial<IAiSettings>) : {};
@@ -131,14 +147,14 @@ function normalizeAiSettings(raw: unknown): IAiSettings {
     typeof obj.model === 'string' && obj.model.trim()
       ? obj.model.trim()
       : DEFAULT_AI_MODELS[provider];
-  const ollamaUrl =
-    typeof obj.ollamaUrl === 'string' && obj.ollamaUrl.trim()
-      ? obj.ollamaUrl.trim().replace(/\/+$/, '')
-      : DEFAULT_AI_SETTINGS.ollamaUrl;
-  const openaiBaseUrl =
-    typeof obj.openaiBaseUrl === 'string' && obj.openaiBaseUrl.trim()
-      ? obj.openaiBaseUrl.trim().replace(/\/+$/, '')
-      : DEFAULT_AI_SETTINGS.openaiBaseUrl;
+  const ollamaUrl = sanitizeHttpEndpoint(
+    obj.ollamaUrl,
+    DEFAULT_AI_SETTINGS.ollamaUrl
+  );
+  const openaiBaseUrl = sanitizeHttpEndpoint(
+    obj.openaiBaseUrl,
+    DEFAULT_AI_SETTINGS.openaiBaseUrl
+  );
   const timeoutMs =
     typeof obj.timeoutMs === 'number' &&
     Number.isFinite(obj.timeoutMs) &&

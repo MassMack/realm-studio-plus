@@ -418,7 +418,10 @@ function walkSourceFiles(
     }
     const full = path.join(rootDir, name);
     try {
-      const stat = fs.statSync(full);
+      const stat = fs.lstatSync(full);
+      if (stat.isSymbolicLink()) {
+        continue;
+      }
       if (stat.isDirectory()) {
         walkSourceFiles(full, depth + 1, acc);
       } else if (stat.isFile()) {
@@ -457,7 +460,7 @@ export function indexProjectSourceDir(
   const seenIds = new Set<string>();
 
   const declRegex =
-    /^\s*(?:export\s+)?(?:public|private|internal|open|final|data|abstract|sealed|static|\s)*\b(class|struct|enum|interface|type)\s+([A-Za-z_][A-Za-z0-9_]*)/;
+    /^\s*(?:export\s+)?(?:(?:public|private|internal|open|final|data|abstract|sealed|static)\s+)*\b(class|struct|enum|interface|type)\s+([A-Za-z_][A-Za-z0-9_]*)/;
 
   for (const filePath of files) {
     if (symbols.length >= MAX_INDEX_SYMBOLS) {
@@ -633,8 +636,17 @@ export function retrieveRelevantKbContext(params: {
   prompt: string;
   activeClassName: string;
   classes: Realm.ObjectSchema[];
+  includeCodeSnippets?: boolean;
+  includeQueryHistory?: boolean;
 }): IRetrievedKnowledgeContext {
-  const { kb, prompt, activeClassName, classes } = params;
+  const {
+    kb,
+    prompt,
+    activeClassName,
+    classes,
+    includeCodeSnippets = true,
+    includeQueryHistory = true
+  } = params;
   const activeSchema = classes.find((c) => c.name === activeClassName);
   const activePropNames = activeSchema
     ? Object.keys(activeSchema.properties)
@@ -650,28 +662,30 @@ export function retrieveRelevantKbContext(params: {
     }
   }
 
-  const scoredSymbols = (kb.indexedSymbols || [])
-    .map((sym) => {
-      const nameMatchBoost =
-        sym.name.toLowerCase() === activeClassName.toLowerCase()
-          ? 2.0
-          : sym.name.toLowerCase().includes(activeClassName.toLowerCase())
-            ? 1.0
-            : 0;
-      const enumBoost = sym.kind === 'enum' ? 0.25 : 0;
-      return {
-        sym,
-        score: scoreOverlap(queryTokens, sym.tokens, nameMatchBoost + enumBoost)
-      };
-    })
-    .filter((item) => item.score > 0.25)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 4)
-    .map((item) => ({
-      name: item.sym.name,
-      filePath: item.sym.filePath,
-      snippet: item.sym.snippet
-    }));
+  const scoredSymbols = includeCodeSnippets
+    ? (kb.indexedSymbols || [])
+        .map((sym) => {
+          const nameMatchBoost =
+            sym.name.toLowerCase() === activeClassName.toLowerCase()
+              ? 2.0
+              : sym.name.toLowerCase().includes(activeClassName.toLowerCase())
+                ? 1.0
+                : 0;
+          const enumBoost = sym.kind === 'enum' ? 0.25 : 0;
+          return {
+            sym,
+            score: scoreOverlap(queryTokens, sym.tokens, nameMatchBoost + enumBoost)
+          };
+        })
+        .filter((item) => item.score > 0.25)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 4)
+        .map((item) => ({
+          name: item.sym.name,
+          filePath: item.sym.filePath,
+          snippet: item.sym.snippet
+        }))
+    : [];
 
   const exampleScored = (kb.customExamples || [])
     .map((ex) => {
@@ -690,7 +704,9 @@ export function retrieveRelevantKbContext(params: {
     .slice(0, 4)
     .map((item) => item.ex);
 
-  const historyQueries = loadLocalStorageQueryHistory(activeSchema);
+  const historyQueries = includeQueryHistory
+    ? loadLocalStorageQueryHistory(activeSchema)
+    : [];
   const existingRql = new Set(exampleScored.map((e) => e.rql));
   for (const q of historyQueries) {
     if (!existingRql.has(q) && exampleScored.length < 6) {

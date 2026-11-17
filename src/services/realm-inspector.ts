@@ -97,7 +97,6 @@ interface IResolvedTargetRealm {
   path: string;
   source: RealmTargetSource;
   activeClassName?: string;
-  sessionKeyHex?: string;
 }
 
 export function resolveTargetRealm(rawPath?: string): IResolvedTargetRealm {
@@ -109,8 +108,7 @@ export function resolveTargetRealm(rawPath?: string): IResolvedTargetRealm {
     return {
       path: resolved,
       source: 'explicit-path',
-      activeClassName: matchingSession?.activeClassName,
-      sessionKeyHex: matchingSession?.encryptionKeyHex
+      activeClassName: matchingSession?.activeClassName
     };
   }
 
@@ -119,8 +117,7 @@ export function resolveTargetRealm(rawPath?: string): IResolvedTargetRealm {
       return {
         path: session.path,
         source: 'open-window',
-        activeClassName: session.activeClassName,
-        sessionKeyHex: session.encryptionKeyHex
+        activeClassName: session.activeClassName
       };
     }
   }
@@ -265,8 +262,7 @@ function isDecryptionOrInvalidFormatError(err: unknown): boolean {
 
 function collectCandidateKeys(
   resolvedPath: string,
-  explicitKeyHex?: string,
-  sessionKeyHex?: string
+  explicitKeyHex?: string
 ): Array<Uint8Array | undefined> {
   const seenHex = new Set<string>();
   const keyBuffers: Uint8Array[] = [];
@@ -285,7 +281,6 @@ function collectCandidateKeys(
 
   pushHex(explicitKeyHex);
   pushHex(process.env.REALM_ENCRYPTION_KEY);
-  pushHex(sessionKeyHex);
   for (const vaultKey of getCandidateKeysForPath(resolvedPath)) {
     try {
       pushHex(vaultKey);
@@ -294,13 +289,10 @@ function collectCandidateKeys(
     }
   }
 
-  // If explicit/env/session key was provided, try keys first; otherwise try unencrypted first then Vault keys
-  const hasExplicitOrSession =
-    !!explicitKeyHex?.trim() ||
-    !!process.env.REALM_ENCRYPTION_KEY?.trim() ||
-    !!sessionKeyHex?.trim();
+  const hasExplicitKey =
+    !!explicitKeyHex?.trim() || !!process.env.REALM_ENCRYPTION_KEY?.trim();
 
-  if (hasExplicitOrSession) {
+  if (hasExplicitKey) {
     return [...keyBuffers, undefined];
   }
   return [undefined, ...keyBuffers];
@@ -326,11 +318,7 @@ export function withOpenedRealm<T>(
     throw new Error(`Path is not a file: ${resolvedPath}`);
   }
 
-  const attempts = collectCandidateKeys(
-    resolvedPath,
-    encryptionKeyHex,
-    target.sessionKeyHex
-  );
+  const attempts = collectCandidateKeys(resolvedPath, encryptionKeyHex);
   let lastError: unknown;
   let realm: Realm | null = null;
 

@@ -19,7 +19,7 @@
 import { execFileSync } from 'child_process';
 import * as remote from '@electron/remote';
 import path from 'path';
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -32,7 +32,8 @@ import {
   Modal,
   ModalBody,
   ModalFooter,
-  ModalHeader
+  ModalHeader,
+  Progress
 } from 'reactstrap';
 import Realm from 'realm';
 
@@ -42,8 +43,12 @@ import {
 } from '../../services/active-realms';
 import {
   getAiApiKey,
+  getLocalModelRecommendation,
+  IOllamaPullProgress,
   isApiKeyEncryptionAvailable,
+  isOllamaModelInstalled,
   listOllamaModels,
+  pullOllamaModel,
   setAiApiKey,
   testAiConnection
 } from '../../services/ai';
@@ -75,13 +80,15 @@ export interface IAiSettingsModalProps {
   toggle: () => void;
 }
 
+const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+
 const MODEL_SUGGESTIONS: Readonly<Record<AiProvider, string[]>> = {
   ollama: [
-    'qwen2.5:7b',
-    'qwen2.5-coder:7b',
-    'qwen2.5:14b',
+    'qwen3.5:9b',
     'qwen3:8b',
-    'llama3.1:8b'
+    'qwen3.5:4b',
+    'qwen3:14b',
+    'qwen2.5:7b'
   ],
   gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
   openai: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'],
@@ -90,7 +97,13 @@ const MODEL_SUGGESTIONS: Readonly<Record<AiProvider, string[]>> = {
 
 type McpClientFormat = 'vscode' | 'mcpServers';
 
+let cachedMcpRuntimePaths: { nodeCommand: string; bundlePath: string } | null =
+  null;
+
 function resolveMcpRuntimePaths(): { nodeCommand: string; bundlePath: string } {
+  if (cachedMcpRuntimePaths) {
+    return cachedMcpRuntimePaths;
+  }
   let bundlePath = 'build/mcp.bundle.js';
   try {
     bundlePath = path.join(remote.app.getAppPath(), 'build', 'mcp.bundle.js');
@@ -110,15 +123,13 @@ function resolveMcpRuntimePaths(): { nodeCommand: string; bundlePath: string } {
   } catch {
     // fallback to 'node' on PATH
   }
-  return { nodeCommand, bundlePath };
+  cachedMcpRuntimePaths = { nodeCommand, bundlePath };
+  return cachedMcpRuntimePaths;
 }
 
 function getPreferredEncryptionKeyHex(): string {
   const active = listActiveRealmSessions();
   for (const s of active) {
-    if (s.encryptionKeyHex) {
-      return s.encryptionKeyHex;
-    }
     const candidates = getCandidateKeysForPath(s.path);
     if (candidates.length > 0) {
       return candidates[0];
@@ -191,7 +202,14 @@ export const AiSettingsModal = ({
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaReachable, setOllamaReachable] = useState<boolean | null>(null);
   const [isScanningOllama, setIsScanningOllama] = useState(false);
+  const [pullingModel, setPullingModel] = useState<string | null>(null);
+  const [pullProgress, setPullProgress] = useState<IOllamaPullProgress | null>(
+    null
+  );
+  const pullAbortRef = useRef<AbortController | null>(null);
+  const modelRec = useMemo(() => getLocalModelRecommendation(), []);
   const [isTesting, setIsTesting] = useState(false);
   const [copiedMcp, setCopiedMcp] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -208,6 +226,20 @@ export const AiSettingsModal = ({
 
   const nonSystemClasses = classes.filter((c) => !c.name.startsWith('__'));
 
+  const scanOllamaQuietly = async (targetUrl: string) => {
+    setIsScanningOllama(true);
+    try {
+      const models = await listOllamaModels(targetUrl);
+      setOllamaModels(models);
+      setOllamaReachable(true);
+    } catch {
+      setOllamaModels([]);
+      setOllamaReachable(false);
+    } finally {
+      setIsScanningOllama(false);
+    }
+  };
+
   const handleOpened = () => {
     const current = settings.getAiSettings();
     setSelectedTab(null);
@@ -216,8 +248,14 @@ export const AiSettingsModal = ({
     setShowKey(false);
     setTestResult(null);
     setOllamaModels([]);
+    setOllamaReachable(null);
+    setPullingModel(null);
+    setPullProgress(null);
     setCopiedMcp(false);
     setKbStatus(null);
+    if (current.provider === 'ollama') {
+      void scanOllamaQuietly(current.ollamaUrl);
+    }
 
     const active = listActiveRealmsPublic();
     setOpenRealmsCount(active.length);
@@ -261,15 +299,27 @@ export const AiSettingsModal = ({
     try {
       const models = await listOllamaModels(form.ollamaUrl);
       setOllamaModels(models);
+      setOllamaReachable(true);
       if (models.length === 0) {
         setTestResult({
-          ok: false,
-          message: `Connected to Ollama, but no models found. Run "ollama pull ${form.model}" first.`
+          ok: true,
+          message:
+            'Connected to Ollama. No local models are installed yet — choose one below to download if desired, or skip Local AI.'
         });
-      } else if (!models.includes(form.model)) {
-        setForm((prev) => ({ ...prev, model: models[0] }));
+      } else if (!isOllamaModelInstalled(models, form.model)) {
+        setTestResult({
+          ok: true,
+          message: `Connected to Ollama (${models.length} installed: ${models.slice(0, 4).join(', ')}). "${form.model}" is not downloaded yet.`
+        });
+      } else {
+        setTestResult({
+          ok: true,
+          message: `Connected to Ollama. Model "${form.model}" is installed and ready.`
+        });
       }
     } catch (err) {
+      setOllamaModels([]);
+      setOllamaReachable(false);
       setTestResult({
         ok: false,
         message: `Could not reach Ollama at ${form.ollamaUrl}: ${
@@ -278,6 +328,77 @@ export const AiSettingsModal = ({
       });
     } finally {
       setIsScanningOllama(false);
+    }
+  };
+
+  const handlePullModel = async (tag: string) => {
+    if (pullAbortRef.current) {
+      pullAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    pullAbortRef.current = controller;
+    setPullingModel(tag);
+    setPullProgress({ status: 'Starting download...' });
+    setTestResult(null);
+
+    try {
+      await pullOllamaModel({
+        ollamaUrl: form.ollamaUrl,
+        model: tag,
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (!controller.signal.aborted) {
+            setPullProgress(p);
+          }
+        }
+      });
+      if (!controller.signal.aborted) {
+        setForm((prev) => ({ ...prev, model: tag }));
+        const refreshed = await listOllamaModels(form.ollamaUrl).catch(
+          () => ollamaModels
+        );
+        setOllamaModels(refreshed);
+        setOllamaReachable(true);
+        setTestResult({
+          ok: true,
+          message: `Model "${tag}" downloaded and selected cleanly.`
+        });
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        setTestResult({
+          ok: false,
+          message: `Cancelled downloading "${tag}".`
+        });
+      } else {
+        setTestResult({
+          ok: false,
+          message: err instanceof Error ? err.message : String(err)
+        });
+      }
+    } finally {
+      if (pullAbortRef.current === controller) {
+        pullAbortRef.current = null;
+        setPullingModel(null);
+        setPullProgress(null);
+      }
+    }
+  };
+
+  const handleCancelPull = () => {
+    if (pullAbortRef.current) {
+      pullAbortRef.current.abort();
+      pullAbortRef.current = null;
+    }
+    setPullingModel(null);
+    setPullProgress(null);
+  };
+
+  const handleOpenOllamaDownloadPage = () => {
+    try {
+      void remote.shell.openExternal(OLLAMA_DOWNLOAD_URL);
+    } catch {
+      // ignore outside electron
     }
   };
 
@@ -448,7 +569,15 @@ export const AiSettingsModal = ({
       isOpen={isOpen}
       toggle={toggle}
       onOpened={handleOpened}
-      onClosed={() => setSelectedTab(null)}
+      onClosed={() => {
+        if (pullAbortRef.current) {
+          pullAbortRef.current.abort();
+          pullAbortRef.current = null;
+          setPullingModel(null);
+          setPullProgress(null);
+        }
+        setSelectedTab(null);
+      }}
       size="lg"
     >
       <ModalHeader toggle={toggle}>
@@ -585,6 +714,148 @@ export const AiSettingsModal = ({
                 ))}
               </div>
             </FormGroup>
+
+            {form.provider === 'ollama' && (
+              <div className="border rounded p-2 mb-3 small">
+                <div className="d-flex justify-content-between align-items-center mb-2 flex-wrap">
+                  <div>
+                    <strong>Optional Local AI Models</strong>{' '}
+                    <Badge color="info" className="ml-1">
+                      System RAM: {modelRec.ramGb} GB · Recommended:{' '}
+                      {modelRec.recommendedTag}
+                    </Badge>
+                  </div>
+                  <span className="text-muted">
+                    User choice — never downloaded automatically
+                  </span>
+                </div>
+
+                {ollamaReachable === false ? (
+                  <Alert color="secondary" className="py-2 px-2 small mb-2">
+                    <div className="d-flex justify-content-between align-items-center flex-wrap">
+                      <span>
+                        Ollama is not running yet (optional). Install Ollama
+                        only if you want private offline AI, or use Cloud /
+                        Copilot MCP instead.
+                      </span>
+                      <div className="mt-1 mt-sm-0">
+                        <Button
+                          size="sm"
+                          color="primary"
+                          className="mr-1"
+                          onClick={handleOpenOllamaDownloadPage}
+                        >
+                          <i
+                            className="fa fa-external-link"
+                            aria-hidden="true"
+                          />{' '}
+                          Get Ollama
+                        </Button>
+                        <Button
+                          size="sm"
+                          color="secondary"
+                          onClick={() => void handleScanOllama()}
+                          disabled={isScanningOllama}
+                        >
+                          Re-Check
+                        </Button>
+                      </div>
+                    </div>
+                  </Alert>
+                ) : null}
+
+                {modelRec.presets.map((preset) => {
+                  const installed = isOllamaModelInstalled(
+                    ollamaModels,
+                    preset.tag
+                  );
+                  const isPullingThis = pullingModel === preset.tag;
+                  return (
+                    <div
+                      key={preset.tag}
+                      className="d-flex justify-content-between align-items-center py-1 border-top"
+                    >
+                      <div style={{ minWidth: 0, marginRight: 8 }}>
+                        <div>
+                          <code>{preset.tag}</code>{' '}
+                          <Badge color="secondary" className="ml-1">
+                            {preset.approxSizeGb}
+                          </Badge>
+                          {preset.recommended ? (
+                            <Badge color="primary" className="ml-1">
+                              Best for {modelRec.ramGb} GB RAM
+                            </Badge>
+                          ) : null}
+                          {installed ? (
+                            <Badge color="success" className="ml-1">
+                              Installed
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <div className="text-muted">{preset.note}</div>
+                      </div>
+                      <div className="d-flex flex-shrink-0">
+                        <Button
+                          size="sm"
+                          color={form.model === preset.tag ? 'primary' : 'secondary'}
+                          outline={form.model !== preset.tag}
+                          className="mr-1"
+                          onClick={() =>
+                            setForm((prev) => ({ ...prev, model: preset.tag }))
+                          }
+                        >
+                          {form.model === preset.tag ? 'Selected' : 'Select'}
+                        </Button>
+                        {!installed && ollamaReachable !== false ? (
+                          <Button
+                            size="sm"
+                            color="success"
+                            outline
+                            disabled={Boolean(pullingModel)}
+                            onClick={() => void handlePullModel(preset.tag)}
+                          >
+                            {isPullingThis ? 'Downloading...' : 'Download'}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {pullingModel && pullProgress ? (
+                  <div className="mt-2 pt-2 border-top">
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                      <span>
+                        Downloading <code>{pullingModel}</code>:{' '}
+                        {pullProgress.status}
+                        {pullProgress.completedBytes !== undefined &&
+                        pullProgress.totalBytes
+                          ? ` (${(
+                              pullProgress.completedBytes /
+                              (1024 * 1024)
+                            ).toFixed(0)} / ${(
+                              pullProgress.totalBytes /
+                              (1024 * 1024)
+                            ).toFixed(0)} MB)`
+                          : ''}
+                      </span>
+                      <Button
+                        size="sm"
+                        color="danger"
+                        onClick={handleCancelPull}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                    <Progress
+                      animated
+                      color="info"
+                      value={pullProgress.percent ?? 15}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             {form.provider === 'ollama' && (
               <FormGroup>

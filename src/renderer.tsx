@@ -45,6 +45,16 @@ import { CurrentWindow } from './windows/WindowComponent';
 // Before the first render, so nothing is ever painted in the wrong appearance
 startThemeSync();
 
+// Prevent accidental dropped files from navigating the BrowserWindow to a local file:// URL
+document.addEventListener('dragover', (event) => {
+  event.preventDefault();
+});
+document.addEventListener('drop', (event) => {
+  if (!event.defaultPrevented) {
+    event.preventDefault();
+  }
+});
+
 const appElement = document.getElementById('app');
 const root = appElement ? createRoot(appElement) : null;
 

@@ -19,6 +19,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 
+import { getRemote } from '../utils/electron-or-remote';
 import { resolveSharedUserDataDir } from '../utils/user-data-path';
 
 const STORAGE_KEY = 'realm-studio-encryption-keys-v1';
@@ -38,6 +39,26 @@ interface IEncryptionKeyStore {
   savedKeys: ISavedEncryptionKey[];
 }
 
+interface IEncryptedVaultEnvelope {
+  encrypted: true;
+  payload: string;
+}
+
+let inMemoryVault: IEncryptionKeyStore | null = null;
+
+function getSafeStorage(): Electron.SafeStorage | null {
+  try {
+    const ss = (getRemote() as unknown as { safeStorage?: Electron.SafeStorage })
+      .safeStorage;
+    if (ss && typeof ss.isEncryptionAvailable === 'function') {
+      return ss;
+    }
+  } catch {
+    // ignore outside Electron renderer
+  }
+  return null;
+}
+
 function getDiskStorePath(): string {
   return path.join(resolveSharedUserDataDir(), KEYS_FILE_NAME);
 }
@@ -55,10 +76,25 @@ function normalizeStore(parsed: Partial<IEncryptionKeyStore>): IEncryptionKeySto
 }
 
 function writeDiskStore(data: IEncryptionKeyStore) {
+  inMemoryVault = data;
+  const ss = getSafeStorage();
+  if (!ss || !ss.isEncryptionAvailable()) {
+    // Do not write cleartext encryption keys to disk when OS Keychain encryption is unavailable
+    return;
+  }
   try {
     const filePath = getDiskStorePath();
     fs.ensureDirSync(path.dirname(filePath));
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
+    const envelope: IEncryptedVaultEnvelope = {
+      encrypted: true,
+      payload: ss.encryptString(JSON.stringify(data)).toString('base64')
+    };
+    fs.writeFileSync(filePath, JSON.stringify(envelope, null, 2), {
+      mode: 0o600
+    });
+    if (process.platform !== 'win32') {
+      fs.chmodSync(filePath, 0o600);
+    }
   } catch {
     // ignore disk sync failures
   }
@@ -67,17 +103,56 @@ function writeDiskStore(data: IEncryptionKeyStore) {
 function readDiskStore(): IEncryptionKeyStore | null {
   try {
     const filePath = getDiskStorePath();
-    if (fs.existsSync(filePath)) {
-      const parsed = fs.readJsonSync(filePath) as Partial<IEncryptionKeyStore>;
-      return normalizeStore(parsed);
+    if (!fs.existsSync(filePath)) {
+      return null;
     }
+    const raw = fs.readJsonSync(filePath) as
+      | Partial<IEncryptionKeyStore>
+      | Partial<IEncryptedVaultEnvelope>;
+    if (
+      raw &&
+      (raw as Partial<IEncryptedVaultEnvelope>).encrypted === true &&
+      typeof (raw as Partial<IEncryptedVaultEnvelope>).payload === 'string'
+    ) {
+      const ss = getSafeStorage();
+      if (!ss || !ss.isEncryptionAvailable()) {
+        return null;
+      }
+      const decrypted = ss.decryptString(
+        Buffer.from((raw as IEncryptedVaultEnvelope).payload, 'base64')
+      );
+      return normalizeStore(
+        JSON.parse(decrypted) as Partial<IEncryptionKeyStore>
+      );
+    }
+
+    // Migrate legacy plaintext disk file into encrypted OS Keychain storage if available
+    const legacy = normalizeStore(raw as Partial<IEncryptionKeyStore>);
+    if (legacy.savedKeys.length > 0 && getSafeStorage()?.isEncryptionAvailable()) {
+      writeDiskStore(legacy);
+    }
+    return legacy;
   } catch {
-    // ignore
+    return null;
   }
-  return null;
 }
 
 function readStore(): IEncryptionKeyStore {
+  if (inMemoryVault) {
+    return inMemoryVault;
+  }
+  const disk = readDiskStore();
+  if (disk) {
+    inMemoryVault = disk;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+    }
+    return disk;
+  }
   if (typeof localStorage !== 'undefined') {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -85,11 +160,12 @@ function readStore(): IEncryptionKeyStore {
         const normalized = normalizeStore(
           JSON.parse(raw) as Partial<IEncryptionKeyStore>
         );
-        // Backfill shared disk vault if missing so headless MCP can unlock files
-        const diskPath = getDiskStorePath();
-        if (!fs.existsSync(diskPath) && normalized.savedKeys.length > 0) {
+        inMemoryVault = normalized;
+        if (normalized.savedKeys.length > 0) {
           writeDiskStore(normalized);
         }
+        // Scrub legacy plaintext key cache from browser localStorage
+        localStorage.removeItem(STORAGE_KEY);
         return normalized;
       }
     } catch {
@@ -97,13 +173,14 @@ function readStore(): IEncryptionKeyStore {
     }
   }
 
-  return readDiskStore() ?? { byPath: {}, byFileName: {}, savedKeys: [] };
+  return { byPath: {}, byFileName: {}, savedKeys: [] };
 }
 
 function writeStore(data: IEncryptionKeyStore) {
+  inMemoryVault = data;
   if (typeof localStorage !== 'undefined') {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.removeItem(STORAGE_KEY);
     } catch {
       // ignore
     }

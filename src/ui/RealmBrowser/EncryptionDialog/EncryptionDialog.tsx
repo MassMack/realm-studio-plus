@@ -85,7 +85,7 @@ export const EncryptionDialog = ({
                     className="btn btn-link btn-sm p-0 text-start"
                     style={{ textDecoration: 'none', flex: 1 }}
                     onClick={() => onSelectSavedKey(item)}
-                    title={`Use key: ${item.key}`}
+                    title={`Apply saved key for ${item.label}`}
                   >
                     <strong>{item.label}</strong>{' '}
                     <code>

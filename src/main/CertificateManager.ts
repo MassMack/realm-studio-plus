@@ -42,8 +42,15 @@ export class CertificateManager {
     callback: (isTrusted: boolean) => void
   ) => {
     event.preventDefault();
-    // Check if this fingerprint is already trusted
-    if (this.trustedFingerprints.indexOf(certificate.fingerprint) !== -1) {
+    let hostScope = 'unknown';
+    try {
+      hostScope = new URL(url).host.toLowerCase() || 'unknown';
+    } catch {
+      // ignore invalid URL
+    }
+    const fingerprintKey = `${hostScope}:${certificate.fingerprint}`;
+    // Check if this fingerprint is already trusted for this exact host
+    if (this.trustedFingerprints.indexOf(fingerprintKey) !== -1) {
       callback(true);
     } else {
       const window = electron.BrowserWindow.fromWebContents(webContents);
@@ -55,7 +62,7 @@ export class CertificateManager {
         process.platform !== 'linux'
       );
       if (isTrusted) {
-        this.trustedFingerprints.push(certificate.fingerprint);
+        this.trustedFingerprints.push(fingerprintKey);
       }
       callback(isTrusted);
     }

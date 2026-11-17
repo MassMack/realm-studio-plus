@@ -18,8 +18,35 @@
 
 import Realm from 'realm';
 
-const SENSITIVE_FIELD_PATTERN =
-  /(^|[_-])(password|passwd|pwd|secret|token|refreshtoken|accesstoken|idtoken|apikey|pin|privatekey|passcode)([_-]|$)/i;
+const SENSITIVE_TOKEN_WORDS = new Set([
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+  'token',
+  'refreshtoken',
+  'accesstoken',
+  'idtoken',
+  'authtoken',
+  'apikey',
+  'pin',
+  'pincode',
+  'privatekey',
+  'publickey',
+  'signingkey',
+  'encryptionkey',
+  'passcode',
+  'passphrase',
+  'otp',
+  'cvv',
+  'ssn',
+  'credential',
+  'credentials',
+  'authorization',
+  'cookie',
+  'jwt',
+  'bearer'
+]);
 
 export interface ISerializeRealmOptions {
   maxDepth?: number;
@@ -27,12 +54,28 @@ export interface ISerializeRealmOptions {
 }
 
 export function isSensitivePropertyName(name: string): boolean {
-  const compact = name.replace(/[^a-zA-Z0-9_-]/g, '');
-  return (
-    SENSITIVE_FIELD_PATTERN.test(compact) ||
-    /^(refresh|access|id|auth)?token$/i.test(name) ||
-    /password|secret|apikey/i.test(name)
-  );
+  const normalized = name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  if (SENSITIVE_TOKEN_WORDS.has(normalized)) {
+    return true;
+  }
+  // Split camelCase / PascalCase / snake_case / kebab-case boundaries
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^a-zA-Z0-9]+/)
+    .map((w) => w.toLowerCase())
+    .filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    if (SENSITIVE_TOKEN_WORDS.has(words[i])) {
+      return true;
+    }
+    if (
+      i + 1 < words.length &&
+      SENSITIVE_TOKEN_WORDS.has(`${words[i]}${words[i + 1]}`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function serializeEntryValue(

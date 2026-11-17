@@ -19,6 +19,7 @@
 import { ipcRenderer, MenuItemConstructorOptions, shell } from 'electron';
 import * as remote from '@electron/remote';
 import fs from 'fs-extra';
+import memoizeOne from 'memoize-one';
 import path from 'path';
 import Realm from 'realm';
 import { flushSync } from 'react-dom';
@@ -59,7 +60,6 @@ import { IHighlight } from './Content/Table';
 import { extractObjectIdentifier, IObjectIdentifier } from './display';
 import {
   Focus,
-  generateKey,
   getClassName,
   IClassFocus,
   IListFocus,
@@ -69,6 +69,21 @@ import { IBreadcrumbItem } from './NavigationBar';
 import { isPrimitive } from './primitives';
 import { RealmBrowser } from './RealmBrowser';
 import * as schemaUtils from './schema-utils';
+import {
+  allocateLayoutId,
+  closePaneInLayout,
+  containsPane,
+  countLeaves,
+  createInitialLayout,
+  findAdjacentPaneId,
+  listLeafIds,
+  moveOrSwapPaneInLayout,
+  SplitDirection,
+  SplitDropZone,
+  SplitLayoutNode,
+  splitPaneInLayout,
+  updateBranchRatioInLayout
+} from './split-layout';
 import { SingleObjectCollection } from './Content/SingleObjectCollection';
 import { MockedObjectCollection } from './Content/MockedObjectCollection';
 
@@ -114,6 +129,37 @@ export type JsonViewerDialogExecutor = (
   onSave?: (updatedJson: string) => void
 ) => void;
 
+export interface IPaneViewState {
+  id: string;
+  activeObjectId: IObjectIdentifier | null;
+  allowCreate: boolean;
+  focus: Focus | null;
+  history: INavigationEntry[];
+  historyIndex: number;
+}
+
+export interface ISplitPaneUiCallbacks {
+  onSelect: () => void;
+  onSelectClass: (className: string) => void;
+  onSplitRight: () => void;
+  onSplitDown: () => void;
+  onClose: () => void;
+}
+
+export interface IPaneContentCallbacks {
+  contentRef: (instance: Content | null) => void;
+  onAddColumnClick: () => void;
+  onAskAi: () => void;
+  onClassFocussed: ClassFocussedHandler;
+  onHighlightChange: (
+    highlight: IHighlight | undefined,
+    collection: Realm.OrderedCollection<any>
+  ) => void;
+  onListFocussed: ListFocussedHandler;
+  onSingleListFocussed: SingleListFocussedHandler;
+}
+
+const INITIAL_PANE_ID = 'pane-1';
 const EDIT_MODE_STORAGE_KEY = 'realm-browser-edit-mode';
 const FILE_UPGRADE_NEEDED_MESSAGE = 'Database upgrade required but prohibited.';
 const ARCHITECTURE_MISMATCH_MESSAGE =
@@ -126,18 +172,25 @@ interface INavigationEntry {
   breadcrumbs: IBreadcrumbItem[];
 }
 
+function createEmptyPaneState(id: string): IPaneViewState {
+  return {
+    id,
+    activeObjectId: null,
+    allowCreate: false,
+    focus: null,
+    history: [],
+    historyIndex: -1
+  };
+}
+
 export interface IRealmBrowserState extends IRealmLoadingComponentState {
   // A number that we can use to make components update on changes to data
-  activeObjectId: IObjectIdentifier | null;
+  activePaneId: string;
   androidAutoSyncSec: number;
   androidSyncStatus: string | null;
   dataVersion: number;
   dataVersionAtBeginning?: number;
-  allowCreate: boolean;
   editMode: EditMode;
-  focus: Focus | null;
-  history: INavigationEntry[];
-  historyIndex: number;
   isAddClassOpen: boolean;
   isAddPropertyOpen: boolean;
   isAiQueryOpen: boolean;
@@ -151,6 +204,8 @@ export interface IRealmBrowserState extends IRealmLoadingComponentState {
   isOverviewOpen: boolean;
   importDialog: ImportDialogOptions | null;
   jsonViewerDialog: JsonViewerDialogOptions | null;
+  layout: SplitLayoutNode;
+  panes: Record<string, IPaneViewState | undefined>;
   // The classes are only supposed to be used to produce a list of classes in the sidebar
   classes: Realm.ObjectSchema[];
 }
@@ -163,17 +218,13 @@ class RealmBrowserContainer
   implements IMenuGenerator
 {
   public state: IRealmBrowserState = {
-    activeObjectId: null,
+    activePaneId: INITIAL_PANE_ID,
     androidAutoSyncSec: 0,
     androidSyncStatus: null,
     dataVersion: 0,
-    allowCreate: false,
     editMode:
       (localStorage.getItem(EDIT_MODE_STORAGE_KEY) as EditMode) ||
       EditMode.InputBlur,
-    focus: null,
-    history: [],
-    historyIndex: -1,
     isAddClassOpen: false,
     isAddPropertyOpen: false,
     isAiQueryOpen: false,
@@ -187,11 +238,18 @@ class RealmBrowserContainer
     isOverviewOpen: false,
     importDialog: null,
     jsonViewerDialog: null,
+    layout: createInitialLayout(INITIAL_PANE_ID),
+    panes: {
+      [INITIAL_PANE_ID]: createEmptyPaneState(INITIAL_PANE_ID)
+    },
     progress: { status: 'idle' },
     classes: []
   };
 
-  private contentInstance: Content | null = null;
+  private paneContentInstances = new Map<string, Content | null>();
+  private paneContentCallbackCache = new Map<string, IPaneContentCallbacks>();
+  private paneUiCallbackCache = new Map<string, ISplitPaneUiCallbacks>();
+  private pendingPaneClassNames: Record<string, string | undefined> = {};
   private fileWatcher: fs.FSWatcher | null = null;
   private watchedInode: number | null = null;
   private watchedMtimeMs: number | null = null;
@@ -204,7 +262,6 @@ class RealmBrowserContainer
   private watcherDisabled = false;
   private isReloading = false;
   private readonly activeSessionId = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  private pendingFocusClassName?: string;
   private androidSyncTimer: ReturnType<typeof setInterval> | null = null;
   private isAndroidSyncTicking = false;
   private untriedCandidateKeys: string[] | null = null;
@@ -228,82 +285,89 @@ class RealmBrowserContainer
     super.componentWillUnmount();
     this.removeListeners();
     this.stopWatchingRealmFile();
+    for (const paneId of this.paneContentInstances.keys()) {
+      Content.clearPaneCache(paneId);
+    }
+    this.paneContentInstances.clear();
+    this.paneContentCallbackCache.clear();
+    this.paneUiCallbackCache.clear();
     if (this.realm && this.realm.isInTransaction) {
       this.realm.cancelTransaction();
     }
   }
 
   public render() {
-    const { focus, history, historyIndex } = this.state;
-    // Generating a key for the content component (includes length of properties to update when the schema changes)
-    const contentKey = generateKey(focus, true);
-    const currentEntry =
-      historyIndex >= 0 && historyIndex < history.length
-        ? history[historyIndex]
-        : undefined;
-    const breadcrumbs = currentEntry
-      ? currentEntry.breadcrumbs
-      : focus && focus.kind === 'class'
-        ? [{ label: focus.className, focus }]
-        : [];
+    const { activePaneId, layout, panes } = this.state;
+    const resolvedPaneId = containsPane(layout, activePaneId)
+      ? activePaneId
+      : listLeafIds(layout)[0] ?? INITIAL_PANE_ID;
+    const navSnapshot = this.getPaneSnapshot(resolvedPaneId);
+    const breadcrumbs = this.getPaneBreadcrumbs(resolvedPaneId);
     return (
       <RealmBrowser
-        activeObjectId={this.state.activeObjectId}
+        activeObjectId={navSnapshot.activeObjectId}
+        activePaneId={resolvedPaneId}
+        aiSettingsInitialTab={this.state.aiSettingsInitialTab}
         androidAutoSyncSec={this.state.androidAutoSyncSec}
         androidSyncStatus={this.state.androidSyncStatus}
         breadcrumbs={breadcrumbs}
-        canGoBack={historyIndex > 0}
-        canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
+        canGoBack={navSnapshot.historyIndex > 0}
+        canGoForward={
+          navSnapshot.historyIndex >= 0 &&
+          navSnapshot.historyIndex < navSnapshot.history.length - 1
+        }
         classes={this.state.classes}
         commandPaletteActions={this.getCommandPaletteActions()}
-        contentKey={contentKey}
-        contentRef={this.contentRef}
         dataVersion={this.state.dataVersion}
         dataVersionAtBeginning={this.state.dataVersionAtBeginning}
-        allowCreate={this.state.allowCreate}
         editMode={this.props.readOnly ? EditMode.Disabled : this.state.editMode}
-        focus={this.state.focus}
         getClassFocus={this.getClassFocus}
+        getPaneContentCallbacks={this.getPaneContentCallbacks}
+        getPaneUiCallbacks={this.getPaneUiCallbacks}
         getSchemaLength={this.getSchemaLength}
         importDialog={this.state.importDialog}
-        jsonViewerDialog={this.state.jsonViewerDialog}
         isAddClassOpen={this.state.isAddClassOpen}
         isAddPropertyOpen={this.state.isAddPropertyOpen}
         isAiQueryOpen={this.state.isAiQueryOpen}
         isAiSettingsOpen={this.state.isAiSettingsOpen}
-        aiSettingsInitialTab={this.state.aiSettingsInitialTab}
         isAndroidTracked={this.state.isAndroidTracked}
         isClassNameAvailable={this.isClassNameAvailable}
         isCommandPaletteOpen={this.state.isCommandPaletteOpen}
+        isEmbeddedType={this.isEmbeddedType}
         isEncryptionDialogVisible={this.state.isEncryptionDialogVisible}
         isGlobalSearchOpen={this.state.isGlobalSearchOpen}
         isLeftSidebarOpen={this.state.isLeftSidebarOpen}
         isOverviewOpen={this.state.isOverviewOpen}
         isPropertyNameAvailable={this.isPropertyNameAvailable}
+        jsonViewerDialog={this.state.jsonViewerDialog}
+        layout={layout}
         onAddClass={this.onAddClass}
         onAddProperty={this.onAddProperty}
         onApplyAiQuery={this.onApplyAiQuery}
-        onOpenAiSettingsTab={this.openAiSettingsTab}
         onBack={this.onNavigateBack}
         onBreadcrumbClick={this.onBreadcrumbClick}
-        onConfigureAndroidSync={this.onConfigureAndroidSync}
         onCancelTransaction={this.onCancelTransaction}
         onClassFocussed={this.onClassFocussed}
+        onCommitBranchRatio={this.onCommitBranchRatio}
         onCommitTransaction={this.onCommitTransaction}
+        onConfigureAndroidSync={this.onConfigureAndroidSync}
         onDeleteClass={this.onDeleteClass}
+        onDropPane={this.onDropPane}
         onForward={this.onNavigateForward}
-        onHighlightChange={this.onHighlightChange}
         onHideEncryptionDialog={this.onHideEncryptionDialog}
         onHideImportDialog={this.onHideImportDialog}
-        onShowJsonViewerDialog={this.onShowJsonViewerDialog}
         onHideJsonViewerDialog={this.onHideJsonViewerDialog}
         onImport={this.handleImport}
         onLeftSidebarToggle={this.onLeftSidebarToggle}
-        onListFocussed={this.onListFocussed}
-        onSingleListFocussed={this.onSingleListFocussed}
+        onOpenAiSettingsTab={this.openAiSettingsTab}
+        onOpenInSplitView={this.openClassInSplitView}
         onOpenWithEncryption={this.onOpenWithEncryption}
         onRealmChanged={this.onRealmChanged}
         onReload={this.onManualReload}
+        onResetSinglePane={this.resetSinglePane}
+        onShowJsonViewerDialog={this.onShowJsonViewerDialog}
+        onSplitPane={this.splitPane}
+        panes={panes}
         progress={this.state.progress}
         realm={this.realm}
         toggleAddClass={this.toggleAddClass}
@@ -313,7 +377,6 @@ class RealmBrowserContainer
         toggleCommandPalette={this.toggleCommandPalette}
         toggleGlobalSearch={this.toggleGlobalSearch}
         toggleOverview={this.toggleOverview}
-        isEmbeddedType={this.isEmbeddedType}
       />
     );
   }
@@ -547,18 +610,29 @@ class RealmBrowserContainer
   };
 
   protected onRealmSchemaChanged = () => {
-    if (this.realm) {
-      let { focus } = this.state;
-      // Update the classes and derive properties for the active focus
-      if (focus && focus.kind === 'class') {
-        focus = this.getClassFocus(focus.className);
-      } else if (focus && focus.kind === 'list') {
-        focus = this.getListFocus(focus.parent, focus.property);
-      } else if (focus && focus.kind === 'single-object') {
-        focus = this.getSingleObjectFocus(focus.parent, focus.property);
-      }
-      this.setState({ classes: this.realm.schema, focus });
+    if (!this.realm) {
+      return;
     }
+    const schema = this.realm.schema;
+    this.setState((prev) => {
+      const nextPanes: Record<string, IPaneViewState | undefined> = {};
+      for (const [paneId, pane] of Object.entries(prev.panes)) {
+        if (!pane) {
+          continue;
+        }
+        const nextFocus =
+          pane.focus && this.isFocusValid(pane.focus)
+            ? this.refreshFocus(pane.focus)
+            : null;
+        nextPanes[paneId] = {
+          ...pane,
+          focus: nextFocus,
+          allowCreate: nextFocus ? this.isCreateAllowed(nextFocus) : false,
+          activeObjectId: nextFocus ? pane.activeObjectId : null
+        };
+      }
+      return { classes: schema, panes: nextPanes };
+    });
   };
 
   protected onRealmLoaded = () => {
@@ -582,44 +656,71 @@ class RealmBrowserContainer
     }
 
     const isAndroidTracked = !!getTrackedAndroidRealmInfo(this.realm.path);
-    this.setState({
-      classes: this.realm.schema,
-      isAndroidTracked
-    });
-
-    const firstSchemaName = this.realm.schema.find(
+    const nonSystem = this.realm.schema.filter(
       (c) => c.name.indexOf('__') !== 0 && !c.embedded
-    )?.name;
-    const targetClassName =
-      this.pendingFocusClassName &&
-      this.realm.schema.some(
-        (c) => c.name === this.pendingFocusClassName && !c.embedded
-      )
-        ? this.pendingFocusClassName
-        : firstSchemaName;
-    this.pendingFocusClassName = undefined;
+    );
+    const firstSchemaName = nonSystem[0]?.name;
+    const leafIds = listLeafIds(this.state.layout);
+    const pendingSnapshot = { ...this.pendingPaneClassNames };
+    this.pendingPaneClassNames = {};
 
-    const rawKey = this.props.realm.encryptionKey;
-    let sessionKeyHex: string | undefined;
-    if (rawKey) {
-      const view = ArrayBuffer.isView(rawKey)
-        ? new Uint8Array(rawKey.buffer, rawKey.byteOffset, rawKey.byteLength)
-        : new Uint8Array(rawKey as ArrayBuffer);
-      if (view.byteLength === 64) {
-        sessionKeyHex = Buffer.from(view).toString('hex');
+    const nextPanes: Record<string, IPaneViewState> = {};
+    const usedClasses = new Set<string>();
+    const activeLeafId = containsPane(this.state.layout, this.state.activePaneId)
+      ? this.state.activePaneId
+      : leafIds[0] ?? INITIAL_PANE_ID;
+
+    // Resolve the primary/active pane first so sibling panes pick complementary classes
+    const orderedLeaves = [
+      activeLeafId,
+      ...leafIds.filter((id) => id !== activeLeafId)
+    ];
+    for (const paneId of orderedLeaves) {
+      const pending = pendingSnapshot[paneId];
+      let targetClassName =
+        pending && nonSystem.some((c) => c.name === pending)
+          ? pending
+          : undefined;
+      if (!targetClassName) {
+        if (paneId === activeLeafId) {
+          targetClassName = firstSchemaName;
+        } else {
+          const unused = nonSystem.find((c) => !usedClasses.has(c.name));
+          targetClassName = unused?.name ?? firstSchemaName;
+        }
+      }
+      if (targetClassName) {
+        usedClasses.add(targetClassName);
+        const focus = this.getClassFocus(targetClassName);
+        nextPanes[paneId] = {
+          id: paneId,
+          activeObjectId: null,
+          allowCreate: this.isCreateAllowed(focus),
+          focus,
+          history: [{ focus, breadcrumbs: [{ label: targetClassName, focus }] }],
+          historyIndex: 0
+        };
+      } else {
+        nextPanes[paneId] = createEmptyPaneState(paneId);
       }
     }
+
+    const activeFocus = nextPanes[activeLeafId]?.focus;
+    const activeClassName = activeFocus ? getClassName(activeFocus) : undefined;
+
     registerOpenRealmSession({
       id: this.activeSessionId,
       path: this.realm.path,
-      activeClassName: targetClassName,
-      schemaVersion: this.realm.schemaVersion,
-      encryptionKeyHex: sessionKeyHex
+      activeClassName,
+      schemaVersion: this.realm.schemaVersion
     });
 
-    if (targetClassName) {
-      this.onClassFocussed(targetClassName);
-    }
+    this.setState({
+      activePaneId: activeLeafId,
+      classes: this.realm.schema,
+      isAndroidTracked,
+      panes: nextPanes
+    });
     // Start importing data if needed
     if (this.props.import && this.realm) {
       const { format, paths } = this.props.import;
@@ -727,9 +828,34 @@ class RealmBrowserContainer
     });
   };
 
-  private onApplyAiQuery = (query: string) => {
-    if (this.contentInstance) {
-      this.contentInstance.setQuery(query);
+  private onApplyAiQuery = (query: string, targetClassName?: string) => {
+    const activePaneId = this.getResolvedActivePaneId();
+    const currentFocus = this.state.panes[activePaneId]?.focus;
+    const currentClassName = currentFocus
+      ? getClassName(currentFocus)
+      : undefined;
+
+    if (
+      targetClassName &&
+      targetClassName !== currentClassName &&
+      this.realm?.schema.some((s) => s.name === targetClassName)
+    ) {
+      const focus = this.getClassFocus(targetClassName);
+      this.changePaneFocusIfAllowed(
+        activePaneId,
+        focus,
+        undefined,
+        [{ label: targetClassName, focus }],
+        () => {
+          this.paneContentInstances.get(activePaneId)?.setQuery(query);
+        }
+      );
+      return;
+    }
+
+    const targetContent = this.paneContentInstances.get(activePaneId);
+    if (targetContent) {
+      targetContent.setQuery(query);
     }
   };
 
@@ -739,111 +865,521 @@ class RealmBrowserContainer
     });
   };
 
-  private getCommandPaletteActions(): ICommandPaletteAction[] {
-    const actions: ICommandPaletteAction[] = [];
-    for (const schema of this.state.classes) {
-      if (schema.name.startsWith('__')) {
-        continue;
+  private buildCommandPaletteActions = memoizeOne(
+    (
+      classes: Realm.ObjectSchema[],
+      paneCount: number,
+      isAndroidTracked: boolean,
+      readOnly: boolean
+    ): ICommandPaletteAction[] => {
+      const actions: ICommandPaletteAction[] = [];
+      for (const schema of classes) {
+        if (schema.name.startsWith('__')) {
+          continue;
+        }
+        actions.push({
+          id: `class:${schema.name}`,
+          category: 'Class',
+          label: `Open Class: ${schema.name}`,
+          run: () => this.onClassFocussed(schema.name)
+        });
       }
-      actions.push({
-        id: `class:${schema.name}`,
-        category: 'Class',
-        label: `Open Class: ${schema.name}`,
-        run: () => this.onClassFocussed(schema.name)
-      });
-    }
-    actions.push(
-      {
-        id: 'action:ask-ai',
-        category: 'AI',
-        label: 'Ask AI: Natural Language to Realm Query (⌘⇧A)',
-        run: () => this.setState({ isAiQueryOpen: true })
-      },
-      {
-        id: 'action:ai-settings',
-        category: 'AI',
-        label: 'AI Assistant & MCP Server Settings (Copy MCP JSON)...',
-        run: () => this.setState({ isAiSettingsOpen: true })
-      },
-      {
-        id: 'action:global-search',
-        category: 'Action',
-        label: 'Global Search Across All Classes (⌘⇧F)',
-        run: () => this.setState({ isGlobalSearchOpen: true })
-      },
-      {
-        id: 'action:overview',
-        category: 'Action',
-        label: 'Database Overview, Encryption & Schema Code Preview',
-        run: () => this.setState({ isOverviewOpen: true })
-      },
-      {
-        id: 'action:reload',
-        category: 'Action',
-        label: this.state.isAndroidTracked
-          ? 'Pull Fresh from Android & Reload'
-          : 'Reload Realm File from Disk',
-        run: () => this.onManualReload()
-      },
-      ...(this.state.isAndroidTracked
-        ? [
-            {
-              id: 'action:android-sync-5s',
-              category: 'Android',
-              label: 'Android Auto Sync: Every 5 Seconds',
-              run: () => this.setAndroidAutoSync(5)
-            },
-            {
-              id: 'action:android-sync-10s',
-              category: 'Android',
-              label: 'Android Auto Sync: Every 10 Seconds',
-              run: () => this.setAndroidAutoSync(10)
-            },
-            {
-              id: 'action:android-sync-off',
-              category: 'Android',
-              label: 'Android Auto Sync: Turn Off',
-              run: () => this.setAndroidAutoSync(0)
+      actions.push(
+        {
+          id: 'action:ask-ai',
+          category: 'AI',
+          label: 'Ask AI: Search IDs, Q&A & Realm Query (⌘⇧A)',
+          run: () => this.setState({ isAiQueryOpen: true })
+        },
+        {
+          id: 'action:ai-settings',
+          category: 'AI',
+          label: 'AI Assistant & MCP Server Settings (Copy MCP JSON)...',
+          run: () => this.setState({ isAiSettingsOpen: true })
+        },
+        {
+          id: 'action:split-right',
+          category: 'View',
+          label: 'Split Active Pane Right (Left / Right) (⌘\\)',
+          run: () =>
+            this.splitPane(this.getResolvedActivePaneId(), 'horizontal')
+        },
+        {
+          id: 'action:split-down',
+          category: 'View',
+          label: 'Split Active Pane Down (Top / Bottom) (⌘⇧\\)',
+          run: () => this.splitPane(this.getResolvedActivePaneId(), 'vertical')
+        },
+        ...(paneCount > 1
+          ? [
+              {
+                id: 'action:close-active-pane',
+                category: 'View',
+                label: 'Close Active Split Pane',
+                run: () => this.closePane(this.getResolvedActivePaneId())
+              },
+              {
+                id: 'action:reset-single-pane',
+                category: 'View',
+                label: 'Close All Split Panes (Return to Single Pane)',
+                run: () => this.resetSinglePane()
+              }
+            ]
+          : []),
+        {
+          id: 'action:global-search',
+          category: 'Action',
+          label: 'Global Search Across All Classes (⌘⇧F)',
+          run: () => this.setState({ isGlobalSearchOpen: true })
+        },
+        {
+          id: 'action:overview',
+          category: 'Action',
+          label: 'Database Overview, Encryption & Schema Code Preview',
+          run: () => this.setState({ isOverviewOpen: true })
+        },
+        {
+          id: 'action:reload',
+          category: 'Action',
+          label: isAndroidTracked
+            ? 'Pull Fresh from Android & Reload'
+            : 'Reload Realm File from Disk',
+          run: () => this.onManualReload()
+        },
+        ...(isAndroidTracked
+          ? [
+              {
+                id: 'action:android-sync-5s',
+                category: 'Android',
+                label: 'Android Auto Sync: Every 5 Seconds',
+                run: () => this.setAndroidAutoSync(5)
+              },
+              {
+                id: 'action:android-sync-10s',
+                category: 'Android',
+                label: 'Android Auto Sync: Every 10 Seconds',
+                run: () => this.setAndroidAutoSync(10)
+              },
+              {
+                id: 'action:android-sync-off',
+                category: 'Android',
+                label: 'Android Auto Sync: Turn Off',
+                run: () => this.setAndroidAutoSync(0)
+              }
+            ]
+          : []),
+        {
+          id: 'action:reveal-finder',
+          category: 'Action',
+          label: 'Reveal Realm File in Finder',
+          run: () => {
+            if (this.realm) {
+              shell.showItemInFolder(this.realm.path);
             }
-          ]
-        : []),
-      {
-        id: 'action:reveal-finder',
-        category: 'Action',
-        label: 'Reveal Realm File in Finder',
-        run: () => {
-          if (this.realm) {
-            shell.showItemInFolder(this.realm.path);
+          }
+        },
+        {
+          id: 'action:copy-path',
+          category: 'Action',
+          label: 'Copy Local Realm Path to Clipboard',
+          run: () => {
+            void this.copyRealmPathToClipboard();
           }
         }
+      );
+      if (!readOnly) {
+        actions.push(
+          {
+            id: 'action:add-class',
+            category: 'Schema',
+            label: 'Create New Class...',
+            run: () => this.setState({ isAddClassOpen: true })
+          },
+          {
+            id: 'action:add-property',
+            category: 'Schema',
+            label: 'Add Property / Column to Current Class...',
+            run: () => this.setState({ isAddPropertyOpen: true })
+          }
+        );
+      }
+      return actions;
+    }
+  );
+
+  private getCommandPaletteActions(): ICommandPaletteAction[] {
+    return this.buildCommandPaletteActions(
+      this.state.classes,
+      countLeaves(this.state.layout),
+      this.state.isAndroidTracked,
+      Boolean(this.props.readOnly)
+    );
+  }
+
+  private getResolvedActivePaneId(): string {
+    if (containsPane(this.state.layout, this.state.activePaneId)) {
+      return this.state.activePaneId;
+    }
+    return listLeafIds(this.state.layout)[0] ?? INITIAL_PANE_ID;
+  }
+
+  private getActivePaneFocus(): Focus | null {
+    const activeId = this.getResolvedActivePaneId();
+    return this.state.panes[activeId]?.focus ?? null;
+  }
+
+  private getPaneSnapshot(paneId: string) {
+    const pane = this.state.panes[paneId];
+    return {
+      focus: pane?.focus ?? null,
+      history: pane?.history ?? [],
+      historyIndex: pane?.historyIndex ?? -1,
+      activeObjectId: pane?.activeObjectId ?? null,
+      contentInstance: this.paneContentInstances.get(paneId) ?? null
+    };
+  }
+
+  private getPaneBreadcrumbs(paneId: string): IBreadcrumbItem[] {
+    const snap = this.getPaneSnapshot(paneId);
+    if (snap.historyIndex >= 0 && snap.historyIndex < snap.history.length) {
+      return snap.history[snap.historyIndex].breadcrumbs;
+    }
+    if (snap.focus && snap.focus.kind === 'class') {
+      return [{ label: snap.focus.className, focus: snap.focus }];
+    }
+    return [];
+  }
+
+  private cleanupPaneCaches(paneId: string) {
+    this.paneContentInstances.delete(paneId);
+    this.paneContentCallbackCache.delete(paneId);
+    this.paneUiCallbackCache.delete(paneId);
+    delete this.pendingPaneClassNames[paneId];
+    Content.clearPaneCache(paneId);
+  }
+
+  private getPaneUiCallbacks = (paneId: string): ISplitPaneUiCallbacks => {
+    const cached = this.paneUiCallbackCache.get(paneId);
+    if (cached) {
+      return cached;
+    }
+    const callbacks: ISplitPaneUiCallbacks = {
+      onSelect: () => this.onSelectPane(paneId),
+      onSelectClass: (className) => this.onPaneSelectClass(paneId, className),
+      onSplitRight: () => this.splitPane(paneId, 'horizontal'),
+      onSplitDown: () => this.splitPane(paneId, 'vertical'),
+      onClose: () => this.closePane(paneId)
+    };
+    this.paneUiCallbackCache.set(paneId, callbacks);
+    return callbacks;
+  };
+
+  private getPaneContentCallbacks = (paneId: string): IPaneContentCallbacks => {
+    const cached = this.paneContentCallbackCache.get(paneId);
+    if (cached) {
+      return cached;
+    }
+    const callbacks: IPaneContentCallbacks = {
+      contentRef: (instance) => {
+        if (instance) {
+          this.paneContentInstances.set(paneId, instance);
+        } else {
+          this.paneContentInstances.delete(paneId);
+        }
       },
-      {
-        id: 'action:copy-path',
-        category: 'Action',
-        label: 'Copy Local Realm Path to Clipboard',
-        run: () => {
-          void this.copyRealmPathToClipboard();
+      onAddColumnClick: () => {
+        if (this.state.activePaneId !== paneId) {
+          this.setState({ activePaneId: paneId, isAddPropertyOpen: true });
+        } else {
+          this.toggleAddClassProperty();
+        }
+      },
+      onAskAi: () => {
+        if (this.state.activePaneId !== paneId) {
+          this.setState({ activePaneId: paneId, isAiQueryOpen: true });
+        } else {
+          this.toggleAiQuery();
+        }
+      },
+      onClassFocussed: (
+        className,
+        highlightedObject,
+        parentObject,
+        property
+      ) =>
+        this.handlePaneClassFocussed(
+          paneId,
+          className,
+          highlightedObject,
+          parentObject,
+          property
+        ),
+      onHighlightChange: (highlight, collection) =>
+        this.handlePaneHighlightChange(paneId, highlight, collection),
+      onListFocussed: (object, property, highlightedObject) =>
+        this.handlePaneListFocussed(
+          paneId,
+          object,
+          property,
+          highlightedObject
+        ),
+      onSingleListFocussed: (object, property) =>
+        this.handlePaneSingleListFocussed(paneId, object, property)
+    };
+    this.paneContentCallbackCache.set(paneId, callbacks);
+    return callbacks;
+  };
+
+  private pickDefaultSplitClassName(sourcePaneId: string): string | undefined {
+    if (!this.realm) {
+      return undefined;
+    }
+    const nonSystem = this.realm.schema.filter(
+      (c) => !c.name.startsWith('__') && !c.embedded
+    );
+    if (nonSystem.length === 0) {
+      return undefined;
+    }
+    const openClasses = new Set<string>();
+    for (const id of listLeafIds(this.state.layout)) {
+      const f = this.state.panes[id]?.focus;
+      if (f) {
+        openClasses.add(getClassName(f));
+      }
+    }
+    const sourceFocus = this.state.panes[sourcePaneId]?.focus;
+    const sourceClassName = sourceFocus ? getClassName(sourceFocus) : undefined;
+    if (sourceClassName) {
+      const sourceSchema = this.realm.schema.find(
+        (s) => s.name === sourceClassName
+      );
+      if (sourceSchema) {
+        for (const rawProp of Object.values(sourceSchema.properties)) {
+          const objectType =
+            typeof rawProp === 'object' ? rawProp.objectType : undefined;
+          if (
+            objectType &&
+            objectType !== sourceClassName &&
+            !openClasses.has(objectType) &&
+            nonSystem.some((c) => c.name === objectType)
+          ) {
+            return objectType;
+          }
+        }
+      }
+      const unopened = nonSystem.find((c) => !openClasses.has(c.name));
+      if (unopened) {
+        return unopened.name;
+      }
+      const other = nonSystem.find((c) => c.name !== sourceClassName);
+      if (other) {
+        return other.name;
+      }
+    }
+    return sourceClassName ?? nonSystem[0].name;
+  }
+
+  private splitPane = (
+    targetPaneId: string,
+    direction: SplitDirection = 'horizontal',
+    explicitClassName?: string,
+    highlightedObject?: Realm.Object
+  ) => {
+    if (!this.realm) {
+      return;
+    }
+    const resolvedTarget = containsPane(this.state.layout, targetPaneId)
+      ? targetPaneId
+      : this.getResolvedActivePaneId();
+    const targetClassName =
+      explicitClassName || this.pickDefaultSplitClassName(resolvedTarget);
+    if (!targetClassName) {
+      return;
+    }
+    const focus = this.getClassFocus(targetClassName);
+    const allowCreate = this.isCreateAllowed(focus);
+    const newPaneId = allocateLayoutId('pane');
+    const branchId = allocateLayoutId('branch');
+    const validHighlight =
+      highlightedObject && highlightedObject.isValid()
+        ? highlightedObject
+        : undefined;
+    const activeObjectId = validHighlight
+      ? extractObjectIdentifier(validHighlight)
+      : null;
+    const newPaneState: IPaneViewState = {
+      id: newPaneId,
+      activeObjectId,
+      allowCreate,
+      focus,
+      history: [
+        {
+          focus,
+          highlightedObject: validHighlight,
+          breadcrumbs: [
+            {
+              label: targetClassName,
+              objectId: activeObjectId,
+              focus,
+              highlightedObject: validHighlight
+            }
+          ]
+        }
+      ],
+      historyIndex: 0
+    };
+    this.setState(
+      (prev) => {
+        const targetId = containsPane(prev.layout, targetPaneId)
+          ? targetPaneId
+          : listLeafIds(prev.layout)[0] ?? INITIAL_PANE_ID;
+        return {
+          activePaneId: newPaneId,
+          layout: splitPaneInLayout(
+            prev.layout,
+            targetId,
+            newPaneId,
+            direction,
+            'after',
+            branchId
+          ),
+          panes: {
+            ...prev.panes,
+            [newPaneId]: newPaneState
+          }
+        };
+      },
+      () => {
+        if (validHighlight && validHighlight.isValid()) {
+          this.paneContentInstances
+            .get(newPaneId)
+            ?.highlightObject(validHighlight);
         }
       }
     );
-    if (!this.props.readOnly) {
-      actions.push(
-        {
-          id: 'action:add-class',
-          category: 'Schema',
-          label: 'Create New Class...',
-          run: () => this.setState({ isAddClassOpen: true })
-        },
-        {
-          id: 'action:add-property',
-          category: 'Schema',
-          label: 'Add Property / Column to Current Class...',
-          run: () => this.setState({ isAddPropertyOpen: true })
+  };
+
+  private openClassInSplitView = (
+    className: string,
+    highlightedObject?: Realm.Object
+  ) => {
+    this.splitPane(
+      this.getResolvedActivePaneId(),
+      'horizontal',
+      className,
+      highlightedObject
+    );
+  };
+
+  private closePane = (paneId: string) => {
+    this.setState(
+      (prev) => {
+        if (countLeaves(prev.layout) <= 1) {
+          return null;
         }
-      );
+        const nextLayout = closePaneInLayout(prev.layout, paneId);
+        if (nextLayout === prev.layout) {
+          return null;
+        }
+        const nextPanes: Record<string, IPaneViewState | undefined> = {
+          ...prev.panes
+        };
+        delete nextPanes[paneId];
+        const nextActive =
+          prev.activePaneId === paneId ||
+          !containsPane(nextLayout, prev.activePaneId)
+            ? findAdjacentPaneId(prev.layout, paneId) ??
+              listLeafIds(nextLayout)[0] ??
+              INITIAL_PANE_ID
+            : prev.activePaneId;
+        return {
+          activePaneId: nextActive,
+          layout: nextLayout,
+          panes: nextPanes
+        };
+      },
+      () => {
+        this.cleanupPaneCaches(paneId);
+      }
+    );
+  };
+
+  private resetSinglePane = () => {
+    let removedIds: string[] = [];
+    this.setState(
+      (prev) => {
+        const leafIds = listLeafIds(prev.layout);
+        if (leafIds.length <= 1) {
+          return null;
+        }
+        const keepPaneId = containsPane(prev.layout, prev.activePaneId)
+          ? prev.activePaneId
+          : leafIds[0];
+        removedIds = leafIds.filter((id) => id !== keepPaneId);
+        return {
+          activePaneId: keepPaneId,
+          layout: createInitialLayout(keepPaneId),
+          panes: {
+            [keepPaneId]:
+              prev.panes[keepPaneId] ?? createEmptyPaneState(keepPaneId)
+          }
+        };
+      },
+      () => {
+        for (const id of removedIds) {
+          this.cleanupPaneCaches(id);
+        }
+      }
+    );
+  };
+
+  private onSelectPane = (paneId: string) => {
+    if (
+      this.state.activePaneId !== paneId &&
+      containsPane(this.state.layout, paneId)
+    ) {
+      this.setState({ activePaneId: paneId });
     }
-    return actions;
-  }
+  };
+
+  private onCommitBranchRatio = (branchId: string, ratio: number) => {
+    this.setState((prev) => {
+      const nextLayout = updateBranchRatioInLayout(
+        prev.layout,
+        branchId,
+        ratio
+      );
+      return nextLayout === prev.layout ? null : { layout: nextLayout };
+    });
+  };
+
+  private onDropPane = (
+    sourcePaneId: string,
+    targetPaneId: string,
+    zone: SplitDropZone
+  ) => {
+    this.setState((prev) => {
+      const nextLayout = moveOrSwapPaneInLayout(
+        prev.layout,
+        sourcePaneId,
+        targetPaneId,
+        zone
+      );
+      if (nextLayout === prev.layout) {
+        return null;
+      }
+      return {
+        activePaneId: sourcePaneId,
+        layout: nextLayout
+      };
+    });
+  };
+
+  private onPaneSelectClass = (paneId: string, className: string) => {
+    this.setState({ activePaneId: paneId }, () => {
+      this.handlePaneClassFocussed(paneId, className);
+    });
+  };
 
   private onDeleteClass = (className: string) => {
     if (this.props.readOnly || !this.realm) {
@@ -874,28 +1410,54 @@ class RealmBrowserContainer
       const nextFocusClass = nextClasses.find(
         (c) => !c.name.startsWith('__') && !c.embedded && c.name !== className
       )?.name;
-      this.setState(
-        {
-          classes: nextClasses,
-          focus: null,
-          history: [],
-          historyIndex: -1
-        },
-        () => {
-          if (nextFocusClass) {
-            this.onClassFocussed(nextFocusClass);
+      this.setState((prev) => {
+        const nextPanes: Record<string, IPaneViewState | undefined> = {};
+        for (const paneId of listLeafIds(prev.layout)) {
+          const pane = prev.panes[paneId];
+          const wasDeletedClass =
+            !pane?.focus ||
+            getClassName(pane.focus) === className ||
+            !this.isFocusValid(pane.focus);
+          if (wasDeletedClass) {
+            if (nextFocusClass) {
+              const focus = this.getClassFocus(nextFocusClass);
+              nextPanes[paneId] = {
+                id: paneId,
+                activeObjectId: null,
+                allowCreate: this.isCreateAllowed(focus),
+                focus,
+                history: [
+                  { focus, breadcrumbs: [{ label: nextFocusClass, focus }] }
+                ],
+                historyIndex: 0
+              };
+            } else {
+              nextPanes[paneId] = createEmptyPaneState(paneId);
+            }
+          } else if (pane?.focus) {
+            const refreshed = this.refreshFocus(pane.focus);
+            nextPanes[paneId] = {
+              ...pane,
+              focus: refreshed,
+              allowCreate: this.isCreateAllowed(refreshed)
+            };
           }
         }
-      );
+        return {
+          classes: nextClasses,
+          panes: nextPanes
+        };
+      });
     } catch (err) {
       showError(`Failed deleting class "${className}"`, err);
     }
   };
 
   private isPropertyNameAvailable = (name: string): boolean => {
+    const targetFocus = this.getActivePaneFocus();
     return (
-      this.state.focus !== null &&
-      !this.state.focus.properties.find((property) => property.name === name)
+      targetFocus !== null &&
+      !targetFocus.properties.find((property) => property.name === name)
     );
   };
 
@@ -908,28 +1470,32 @@ class RealmBrowserContainer
   private onAddClass = async (schema: Realm.ObjectSchema) => {
     if (this.realm) {
       try {
-        // The schema version needs to be bumped for local realms
+        const leafIds = listLeafIds(this.state.layout);
+        const targetPaneId = this.getResolvedActivePaneId();
+        for (const paneId of leafIds) {
+          const paneFocus = this.state.panes[paneId]?.focus;
+          if (paneFocus) {
+            this.pendingPaneClassNames[paneId] = getClassName(paneFocus);
+          }
+        }
+        this.pendingPaneClassNames[targetPaneId] = schema.name;
         const nextSchemaVersion = this.realm.schemaVersion + 1;
         const modifiedSchema = [...this.state.classes, schema];
-        // Close the current Realm
-        this.realm.close();
-        // Deleting the object to indicate we've closed it
+        const closingRealm = this.realm;
         delete this.realm;
-        // Clear the focus until the realm is re-loaded
-        this.setState({
-          activeObjectId: null,
-          focus: null,
-          history: [],
-          historyIndex: -1
+        flushSync(() => {
+          const clearedPanes: Record<string, IPaneViewState> = {};
+          for (const paneId of leafIds) {
+            clearedPanes[paneId] = createEmptyPaneState(paneId);
+          }
+          this.setState({ panes: clearedPanes });
         });
-        // Load it again with the new schema
+        closingRealm.close();
         await this.loadRealm(
           this.props.realm,
           modifiedSchema,
           nextSchemaVersion
         );
-        // Select the schema when it the realm has loaded
-        this.onClassFocussed(schema.name);
       } catch (err) {
         showError(`Failed creating the model "${schema.name}"`, err);
       }
@@ -937,35 +1503,43 @@ class RealmBrowserContainer
   };
 
   private onAddProperty = async (name: string, type: string) => {
-    if (this.realm && this.state.focus && this.state.focus.kind === 'class') {
+    const activeFocus = this.getActivePaneFocus();
+    if (this.realm && activeFocus && activeFocus.kind === 'class') {
       try {
-        const focusedClassName = this.state.focus.className;
+        const focusedClassName = activeFocus.className;
+        const leafIds = listLeafIds(this.state.layout);
+        const activePaneId = this.getResolvedActivePaneId();
+        for (const paneId of leafIds) {
+          const paneFocus = this.state.panes[paneId]?.focus;
+          if (paneFocus) {
+            this.pendingPaneClassNames[paneId] = getClassName(paneFocus);
+          }
+        }
+        if (!this.pendingPaneClassNames[activePaneId]) {
+          this.pendingPaneClassNames[activePaneId] = focusedClassName;
+        }
         const nextSchemaVersion = this.realm.schemaVersion + 1;
         const modifiedSchema = schemaUtils.addProperty(
           this.state.classes,
-          this.state.focus.className,
+          focusedClassName,
           name,
           type
         );
-        // Close the current Realm
-        this.realm.close();
-        // Deleting the object to indicate we've closed it
+        const closingRealm = this.realm;
         delete this.realm;
-        // Clear the focus until the realm is re-loaded
-        this.setState({
-          activeObjectId: null,
-          focus: null,
-          history: [],
-          historyIndex: -1
+        flushSync(() => {
+          const clearedPanes: Record<string, IPaneViewState> = {};
+          for (const paneId of leafIds) {
+            clearedPanes[paneId] = createEmptyPaneState(paneId);
+          }
+          this.setState({ panes: clearedPanes });
         });
-        // Load it again with the new schema
+        closingRealm.close();
         await this.loadRealm(
           this.props.realm,
           modifiedSchema,
           nextSchemaVersion
         );
-        // Ensure we've selected the class that we've just added a property to
-        this.onClassFocussed(focusedClassName);
       } catch (err) {
         showError(
           `Failed adding the property named "${name}" to the selected schema`,
@@ -974,14 +1548,6 @@ class RealmBrowserContainer
       }
     }
   };
-
-  private getCurrentBreadcrumbs(): IBreadcrumbItem[] {
-    const { history, historyIndex } = this.state;
-    if (historyIndex >= 0 && historyIndex < history.length) {
-      return history[historyIndex].breadcrumbs;
-    }
-    return [];
-  }
 
   private isFocusValid(focus: Focus): boolean {
     if (!this.realm) {
@@ -1003,58 +1569,74 @@ class RealmBrowserContainer
     }
   }
 
-  private changeFocusIfAllowed(
+  private changePaneFocusIfAllowed(
+    paneId: string,
     focus: Focus,
     highlightedObject?: Realm.Object,
-    breadcrumbs?: IBreadcrumbItem[]
+    breadcrumbs?: IBreadcrumbItem[],
+    onCommitted?: () => void
   ) {
-    const canChangeFocus = this.canChangeFocus();
-    if (canChangeFocus) {
-      const allowCreate = this.isCreateAllowed(focus);
-      const { history, historyIndex } = this.state;
-      const nextBreadcrumbs =
-        breadcrumbs ??
-        (focus.kind === 'class' ? [{ label: focus.className, focus }] : []);
-      const nextHistory = history
-        .slice(0, historyIndex + 1)
-        .concat([{ focus, highlightedObject, breadcrumbs: nextBreadcrumbs }])
-        .slice(-MAX_HISTORY_ENTRIES);
-      const nextIndex = nextHistory.length - 1;
-      const activeObjectId = highlightedObject
-        ? extractObjectIdentifier(highlightedObject)
-        : null;
+    if (!this.canChangeFocus(paneId)) {
+      return;
+    }
+    const allowCreate = this.isCreateAllowed(focus);
+    const snap = this.getPaneSnapshot(paneId);
+    const nextBreadcrumbs =
+      breadcrumbs ??
+      (focus.kind === 'class' ? [{ label: focus.className, focus }] : []);
+    const nextHistory = snap.history
+      .slice(0, snap.historyIndex + 1)
+      .concat([{ focus, highlightedObject, breadcrumbs: nextBreadcrumbs }])
+      .slice(-MAX_HISTORY_ENTRIES);
+    const nextIndex = nextHistory.length - 1;
+    const activeObjectId = highlightedObject
+      ? extractObjectIdentifier(highlightedObject)
+      : null;
 
-      this.setState(
-        {
-          activeObjectId,
-          focus,
-          allowCreate,
-          history: nextHistory,
-          historyIndex: nextIndex
-        },
-        () => {
+    this.setState(
+      (prev) => {
+        const existingPane = prev.panes[paneId] ?? createEmptyPaneState(paneId);
+        return {
+          panes: {
+            ...prev.panes,
+            [paneId]: {
+              ...existingPane,
+              id: paneId,
+              activeObjectId,
+              focus,
+              allowCreate,
+              history: nextHistory,
+              historyIndex: nextIndex
+            }
+          }
+        };
+      },
+      () => {
+        if (paneId === this.getResolvedActivePaneId()) {
           updateOpenRealmSession(this.activeSessionId, {
             activeClassName: getClassName(focus),
             focusedAt: Date.now()
           });
-          if (
-            highlightedObject &&
-            highlightedObject.isValid() &&
-            this.contentInstance
-          ) {
-            this.contentInstance.highlightObject(highlightedObject);
-          }
         }
-      );
-    }
+        const targetContent = this.paneContentInstances.get(paneId);
+        if (
+          highlightedObject &&
+          highlightedObject.isValid() &&
+          targetContent
+        ) {
+          targetContent.highlightObject(highlightedObject);
+        }
+        onCommitted?.();
+      }
+    );
   }
 
-  private restoreHistoryEntry(targetIndex: number) {
-    if (!this.canChangeFocus()) {
+  private restorePaneHistoryEntry(paneId: string, targetIndex: number) {
+    if (!this.canChangeFocus(paneId)) {
       return;
     }
-    const { history } = this.state;
-    const entry = history[targetIndex];
+    const snap = this.getPaneSnapshot(paneId);
+    const entry = snap.history[targetIndex];
     if (!entry || !this.isFocusValid(entry.focus)) {
       return;
     }
@@ -1069,24 +1651,38 @@ class RealmBrowserContainer
       : null;
 
     this.setState(
-      {
-        activeObjectId,
-        focus,
-        allowCreate,
-        historyIndex: targetIndex
+      (prev) => {
+        const existingPane = prev.panes[paneId] ?? createEmptyPaneState(paneId);
+        return {
+          panes: {
+            ...prev.panes,
+            [paneId]: {
+              ...existingPane,
+              id: paneId,
+              activeObjectId,
+              focus,
+              allowCreate,
+              historyIndex: targetIndex
+            }
+          }
+        };
       },
       () => {
-        if (validHighlight && this.contentInstance) {
-          this.contentInstance.highlightObject(validHighlight);
+        const targetContent = this.paneContentInstances.get(paneId);
+        if (validHighlight && targetContent) {
+          targetContent.highlightObject(validHighlight);
         }
       }
     );
   }
 
-  private onHighlightChange = (
+  private handlePaneHighlightChange(
+    paneId: string,
     highlight: IHighlight | undefined,
     collection: Realm.OrderedCollection<any>
-  ) => {
+  ) {
+    const currentId = this.getPaneSnapshot(paneId).activeObjectId;
+    let nextId: IObjectIdentifier | null = currentId;
     if (highlight && highlight.rows.size === 1) {
       const rowIndex = highlight.rows.values().next().value;
       const rowObj =
@@ -1095,39 +1691,63 @@ class RealmBrowserContainer
         rowObj && typeof rowObj === 'object'
           ? extractObjectIdentifier(rowObj as Realm.Object)
           : null;
-      const activeObjectId: IObjectIdentifier | null =
+      nextId =
         extracted ??
         (typeof rowIndex === 'number'
           ? { key: 'row', value: `#${rowIndex}`, isPrimaryKey: false }
           : null);
-      this.setState({ activeObjectId });
-    } else if (this.state.activeObjectId !== null) {
-      this.setState({ activeObjectId: null });
+    } else if (currentId !== null) {
+      nextId = null;
+    } else {
+      return;
     }
-  };
+
+    if (nextId === currentId) {
+      return;
+    }
+
+    this.setState((prev) => {
+      const existing = prev.panes[paneId];
+      if (!existing) {
+        return null;
+      }
+      return {
+        panes: {
+          ...prev.panes,
+          [paneId]: {
+            ...existing,
+            activeObjectId: nextId
+          }
+        }
+      };
+    });
+  }
 
   private onNavigateBack = () => {
-    const { history, historyIndex } = this.state;
+    const paneId = this.getResolvedActivePaneId();
+    const { history, historyIndex } = this.getPaneSnapshot(paneId);
     for (let i = historyIndex - 1; i >= 0; i--) {
       if (this.isFocusValid(history[i].focus)) {
-        this.restoreHistoryEntry(i);
+        this.restorePaneHistoryEntry(paneId, i);
         return;
       }
     }
   };
 
   private onNavigateForward = () => {
-    const { history, historyIndex } = this.state;
+    const paneId = this.getResolvedActivePaneId();
+    const { history, historyIndex } = this.getPaneSnapshot(paneId);
     for (let i = historyIndex + 1; i < history.length; i++) {
       if (this.isFocusValid(history[i].focus)) {
-        this.restoreHistoryEntry(i);
+        this.restorePaneHistoryEntry(paneId, i);
         return;
       }
     }
   };
 
   private onBreadcrumbClick = (index: number) => {
-    const currentBreadcrumbs = this.getCurrentBreadcrumbs();
+    const paneId = this.getResolvedActivePaneId();
+    const currentBreadcrumbs = this.getPaneBreadcrumbs(paneId);
     const target = currentBreadcrumbs[index];
     if (!target || !this.isFocusValid(target.focus)) {
       return;
@@ -1138,38 +1758,44 @@ class RealmBrowserContainer
       target.highlightedObject && target.highlightedObject.isValid()
         ? target.highlightedObject
         : undefined;
-    this.changeFocusIfAllowed(focus, validHighlight, nextBreadcrumbs);
+    this.changePaneFocusIfAllowed(
+      paneId,
+      focus,
+      validHighlight,
+      nextBreadcrumbs
+    );
   };
 
-  private onClassFocussed: ClassFocussedHandler = (
-    className,
-    highlightedObject,
-    parentObject,
-    property
-  ) => {
+  private handlePaneClassFocussed(
+    paneId: string,
+    className: string,
+    highlightedObject?: Realm.Object,
+    parentObject?: Realm.Object,
+    property?: IPropertyWithName
+  ) {
     const focus = this.getClassFocus(className);
+    const snap = this.getPaneSnapshot(paneId);
+    const currentBreadcrumbs = this.getPaneBreadcrumbs(paneId);
+
     if (!highlightedObject) {
-      // Top-level class selection from the left sidebar
-      const current = this.state.focus;
+      const current = snap.focus;
       if (
         current &&
         current.kind === 'class' &&
         current.className === className &&
-        this.getCurrentBreadcrumbs().length === 1
+        currentBreadcrumbs.length === 1
       ) {
         return;
       }
-      this.changeFocusIfAllowed(focus, undefined, [
+      this.changePaneFocusIfAllowed(paneId, focus, undefined, [
         { label: className, focus }
       ]);
       return;
     }
 
     const targetId = extractObjectIdentifier(highlightedObject);
-    const currentBreadcrumbs = this.getCurrentBreadcrumbs();
 
     if (parentObject && property) {
-      // User clicked a linked object cell inside a row
       const parentId = extractObjectIdentifier(parentObject);
       const updatedBase = currentBreadcrumbs.map((crumb, idx) =>
         idx === currentBreadcrumbs.length - 1
@@ -1187,14 +1813,13 @@ class RealmBrowserContainer
         focus,
         highlightedObject
       };
-      this.changeFocusIfAllowed(focus, highlightedObject, [
+      this.changePaneFocusIfAllowed(paneId, focus, highlightedObject, [
         ...updatedBase,
         nextCrumb
       ]);
       return;
     }
 
-    // Navigated via ParentObjectFocus in sidebar or direct object jump
     const ancestorIndex = currentBreadcrumbs.findIndex(
       (crumb) =>
         crumb.focus.kind === 'class' && crumb.focus.className === className
@@ -1207,7 +1832,7 @@ class RealmBrowserContainer
             ? { ...c, objectId: targetId ?? c.objectId, highlightedObject }
             : c
         );
-      this.changeFocusIfAllowed(focus, highlightedObject, truncated);
+      this.changePaneFocusIfAllowed(paneId, focus, highlightedObject, truncated);
     } else {
       const nextCrumb: IBreadcrumbItem = {
         label: className,
@@ -1219,18 +1844,22 @@ class RealmBrowserContainer
         currentBreadcrumbs.length > 0
           ? currentBreadcrumbs
           : [{ label: className, objectId: targetId, focus }];
-      this.changeFocusIfAllowed(focus, highlightedObject, [...base, nextCrumb]);
+      this.changePaneFocusIfAllowed(paneId, focus, highlightedObject, [
+        ...base,
+        nextCrumb
+      ]);
     }
-  };
+  }
 
-  private onListFocussed: ListFocussedHandler = (
+  private handlePaneListFocussed(
+    paneId: string,
     object: Realm.Object,
     property: IPropertyWithName,
     highlightedObject?: Realm.Object
-  ) => {
+  ) {
     const focus = this.getListFocus(object, property);
     const parentId = extractObjectIdentifier(object);
-    const currentBreadcrumbs = this.getCurrentBreadcrumbs();
+    const currentBreadcrumbs = this.getPaneBreadcrumbs(paneId);
     const updatedBase = currentBreadcrumbs.map((crumb, idx) =>
       idx === currentBreadcrumbs.length - 1
         ? {
@@ -1249,16 +1878,17 @@ class RealmBrowserContainer
       focus,
       highlightedObject
     };
-    this.changeFocusIfAllowed(focus, highlightedObject, [
+    this.changePaneFocusIfAllowed(paneId, focus, highlightedObject, [
       ...updatedBase,
       nextCrumb
     ]);
-  };
+  }
 
-  private onSingleListFocussed: SingleListFocussedHandler = (
+  private handlePaneSingleListFocussed(
+    paneId: string,
     object: Realm.Object,
     property: IPropertyWithName
-  ) => {
+  ) {
     const focus = this.getSingleObjectFocus(object, property);
     const parentId = extractObjectIdentifier(object);
     const childObj =
@@ -1269,7 +1899,7 @@ class RealmBrowserContainer
       childObj && typeof childObj === 'object'
         ? extractObjectIdentifier(childObj as Realm.Object)
         : null;
-    const currentBreadcrumbs = this.getCurrentBreadcrumbs();
+    const currentBreadcrumbs = this.getPaneBreadcrumbs(paneId);
     const updatedBase = currentBreadcrumbs.map((crumb, idx) =>
       idx === currentBreadcrumbs.length - 1
         ? {
@@ -1285,8 +1915,25 @@ class RealmBrowserContainer
       objectId: childId,
       focus
     };
-    this.changeFocusIfAllowed(focus, undefined, [...updatedBase, nextCrumb]);
-  };
+    this.changePaneFocusIfAllowed(paneId, focus, undefined, [
+      ...updatedBase,
+      nextCrumb
+    ]);
+  }
+
+  private onClassFocussed: ClassFocussedHandler = (
+    className,
+    highlightedObject,
+    parentObject,
+    property
+  ) =>
+    this.handlePaneClassFocussed(
+      this.getResolvedActivePaneId(),
+      className,
+      highlightedObject,
+      parentObject,
+      property
+    );
 
   private getClassFocus = (className: string): IClassFocus | any => {
     if (this.realm) {
@@ -1519,9 +2166,14 @@ class RealmBrowserContainer
     this.stopWatchingRealmFile();
 
     // Preserve currently viewed class across reloads (handy during live debugging)
-    this.pendingFocusClassName = this.state.focus
-      ? getClassName(this.state.focus)
-      : undefined;
+    this.pendingPaneClassNames = {};
+    const leafIds = listLeafIds(this.state.layout);
+    for (const paneId of leafIds) {
+      const paneFocus = this.state.panes[paneId]?.focus;
+      if (paneFocus) {
+        this.pendingPaneClassNames[paneId] = getClassName(paneFocus);
+      }
+    }
 
     // Keep a reference to the realm we are about to discard. We must NOT call
     // realm.close() until React has fully committed a render in which no
@@ -1549,11 +2201,12 @@ class RealmBrowserContainer
     this.realm = undefined;
 
     flushSync(() => {
+      const clearedPanes: Record<string, IPaneViewState> = {};
+      for (const paneId of leafIds) {
+        clearedPanes[paneId] = createEmptyPaneState(paneId);
+      }
       this.setState({
-        activeObjectId: null,
-        focus: null,
-        history: [],
-        historyIndex: -1,
+        panes: clearedPanes,
         classes: [],
         progress: { status: 'in-progress' },
         dataVersion: 0,
@@ -1847,6 +2500,28 @@ class RealmBrowserContainer
       return;
     }
 
+    const isSplitRightShortcut =
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key === '\\';
+    if (isSplitRightShortcut) {
+      e.preventDefault();
+      this.splitPane(this.getResolvedActivePaneId(), 'horizontal');
+      return;
+    }
+
+    const isSplitDownShortcut =
+      (e.metaKey || e.ctrlKey) &&
+      e.shiftKey &&
+      !e.altKey &&
+      (e.key === '\\' || e.key === '|');
+    if (isSplitDownShortcut) {
+      e.preventDefault();
+      this.splitPane(this.getResolvedActivePaneId(), 'vertical');
+      return;
+    }
+
     const target = e.target as HTMLElement | null;
     if (
       target &&
@@ -1984,18 +2659,15 @@ class RealmBrowserContainer
     }
   }
 
-  private canChangeFocus() {
-    if (this.contentInstance) {
-      const { latestCellValidation } = this.contentInstance;
+  private canChangeFocus(paneId: string = this.getResolvedActivePaneId()) {
+    const instance = this.paneContentInstances.get(paneId);
+    if (instance) {
+      const { latestCellValidation } = instance;
       return !latestCellValidation || latestCellValidation.valid;
     } else {
       return true;
     }
   }
-
-  private contentRef = (instance: Content | null) => {
-    this.contentInstance = instance;
-  };
 
   private onExportSchema = (language: Language): void => {
     if (!this.realm) {

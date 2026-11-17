@@ -303,6 +303,42 @@ export async function findAndroidRealmFiles(
   return { devices, files };
 }
 
+const ADB_SERIAL_REGEX = /^[A-Za-z0-9.:_-]{1,120}$/;
+const ANDROID_PKG_REGEX = /^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$/;
+
+export function getDefaultAndroidPullDir(): string {
+  return path.join(os.tmpdir(), 'realm-studio-android');
+}
+
+function isValidAdbSerial(serial: string): boolean {
+  return ADB_SERIAL_REGEX.test(serial) && !serial.includes('..');
+}
+
+function isValidAndroidPackage(pkg: string): boolean {
+  return ANDROID_PKG_REGEX.test(pkg) && !pkg.includes('..');
+}
+
+function isSafeRemoteRealmPath(remoteRelPath: string): boolean {
+  const normalized = path.posix.normalize(remoteRelPath.trim());
+  if (
+    !normalized ||
+    path.posix.isAbsolute(normalized) ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.includes('/../') ||
+    !normalized.toLowerCase().endsWith('.realm')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isPathInsideRoot(candidatePath: string, rootDir: string): boolean {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedCandidate = path.resolve(candidatePath);
+  return resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
+}
+
 export function pullAndroidRealmFile(params: {
   adbBin: string;
   item: IAndroidRealmFile;
@@ -310,10 +346,29 @@ export function pullAndroidRealmFile(params: {
   onProgress?: (bytesWritten: number, totalBytes: number) => void;
 }): Promise<string> {
   const { adbBin, item, destDir, onProgress } = params;
-  const targetDir = path.join(destDir, item.serial, item.pkg);
+  if (!isValidAdbSerial(item.serial)) {
+    return Promise.reject(new Error(`Invalid ADB device serial: "${item.serial}"`));
+  }
+  if (!isValidAndroidPackage(item.pkg)) {
+    return Promise.reject(new Error(`Invalid Android package name: "${item.pkg}"`));
+  }
+  if (!isSafeRemoteRealmPath(item.remoteRelPath)) {
+    return Promise.reject(
+      new Error(`Refused unsafe remote path: "${item.remoteRelPath}"`)
+    );
+  }
+
+  const safeDestRoot = path.resolve(destDir);
+  const targetDir = path.resolve(safeDestRoot, item.serial, item.pkg);
+  if (!isPathInsideRoot(targetDir, safeDestRoot)) {
+    return Promise.reject(new Error('Refused path traversal outside pull root.'));
+  }
   fs.ensureDirSync(targetDir);
 
-  const destFile = path.join(targetDir, path.basename(item.remoteRelPath));
+  const destFile = path.resolve(targetDir, path.basename(item.remoteRelPath));
+  if (!isPathInsideRoot(destFile, targetDir)) {
+    return Promise.reject(new Error('Refused unsafe local destination path.'));
+  }
   const tempFile = `${destFile}.part`;
   const metaFile = `${destFile}.meta.json`;
 
@@ -484,7 +539,7 @@ export async function pullMatchingAndroidRealm(params: {
   }
 
   const target = matches[0];
-  const destDir = params.destDir || path.join(os.tmpdir(), 'realm-studio-android');
+  const destDir = params.destDir || getDefaultAndroidPullDir();
   const expectedDest = path.join(
     destDir,
     target.serial,
@@ -553,6 +608,11 @@ function shellSingleQuote(value: string): string {
 export function getTrackedAndroidRealmInfo(
   localRealmPath: string
 ): IAndroidPullMetadata | null {
+  const trustedRoot = getDefaultAndroidPullDir();
+  if (!isPathInsideRoot(localRealmPath, trustedRoot)) {
+    // Never trust sidecar .meta.json files from arbitrary external directories
+    return null;
+  }
   const metaFile = `${localRealmPath}.meta.json`;
   if (!fs.existsSync(metaFile)) {
     return null;
@@ -562,8 +622,11 @@ export function getTrackedAndroidRealmInfo(
     if (
       meta.source === 'android-adb' &&
       meta.serial &&
+      isValidAdbSerial(meta.serial) &&
       meta.pkg &&
-      meta.remoteRelPath
+      isValidAndroidPackage(meta.pkg) &&
+      meta.remoteRelPath &&
+      isSafeRemoteRealmPath(meta.remoteRelPath)
     ) {
       return meta;
     }
@@ -660,12 +723,9 @@ export async function refreshLocalAndroidRealmIfTracked(
   }
 
   const remoteStat = await fetchRemoteFileStat(adbBin, meta).catch(() => null);
-  const fallbackDestDir = path.dirname(
-    path.dirname(path.dirname(localRealmPath))
-  );
   await pullAndroidRealmFile({
     adbBin,
-    destDir: meta.destDir || fallbackDestDir,
+    destDir: getDefaultAndroidPullDir(),
     item: {
       serial: meta.serial,
       deviceName: ready.model || meta.deviceName || meta.serial,

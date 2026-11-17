@@ -36,6 +36,8 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.blockmap
+            dist/latest*.yml
 
   build-linux:
     name: Build Linux
@@ -55,6 +57,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
+            dist/latest*.yml
 
   build-win:
     name: Build Windows
@@ -73,6 +76,8 @@ jobs:
           name: windows-dist
           path: |
             dist/*.exe
+            dist/*.blockmap
+            dist/latest*.yml
 
   publish-release:
     name: Publish GitHub Release
