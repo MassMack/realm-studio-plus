@@ -381,7 +381,7 @@ class GreetingContainer extends React.Component<
     try {
       const demoPath = path.join(
         remote.app.getPath('userData'),
-        'demo-studio-plus.realm'
+        'demo-studio-ultimate.realm'
       );
       if (!fs.existsSync(demoPath)) {
         const AddressSchema: Realm.ObjectSchema = {
@@ -452,7 +452,7 @@ class GreetingContainer extends React.Component<
           demoRealm.create('User', {
             _id: new Realm.BSON.ObjectId(),
             name: 'Boss Max',
-            email: 'max@realmstudio.plus',
+            email: 'max@realmstudio.ultimate',
             isActive: true,
             address: { city: 'Bangkok', country: 'Thailand' },
             orders: [order1]

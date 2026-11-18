@@ -1,12 +1,12 @@
-# Realm Studio Plus
+# Realm Studio Ultimate
 
 > Forked from https://github.com/realm/realm-studio
 
-Realm Studio Plus is the tool, any developer or system administrator would use when building and maintaining their app built on the Realm Mobile Platform.
+Realm Studio Ultimate is the tool, any developer or system administrator would use when building and maintaining their app built on the Realm Mobile Platform.
 
-Realm Studio Plus ensures that existing **Realm Studio** installations remain operational in anticipation of the end of support for the original version, while also offering enhanced features.
+Realm Studio Ultimate ensures that existing **Realm Studio** installations remain operational in anticipation of the end of support for the original version, while also offering enhanced features.
 
-## New Features Added to Realm Studio Plus
+## New Features Added to Realm Studio Ultimate
 
 - Fix: Added compatibility with the latest operating systems (+ support for macOS Arm builds)
 - Fix: Improved performance and fixed security issues through the latest module updates
@@ -23,7 +23,7 @@ Realm Studio Plus ensures that existing **Realm Studio** installations remain op
 - Feat: **Column Header Statistics & Actions** (`Min`, `Max`, `Sum`, `Average`, `Top Distinct Values`, `Copy Column Values`, `Hide Column`) and **Column Visibility Toggle (`Columns`)**
 - Feat: **Encryption Key Vault & Auto-Unlock** (remembers 128-hex encryption keys per path/filename and unlocks automatically)
 - Feat: **Database Overview, Storage & Schema Code Preview** (`TypeScript`, `Swift`, `Kotlin`, `JavaScript`, `C#`, `Java`), **`Compact Database`**, **`Quick Backup`**, **`Save Decrypted Copy`**, **`Save Encrypted Copy`**, and **`Reveal in Finder`**
-- Feat: **iOS Simulator `.realm` Auto-Finder**, **Android Emulator (ADB) `.realm` Puller & Auto-Sync**, **Drag & Drop File Open**, **Mock Data Generator (10/50/100 rows)**, and **Export Current View (JSON / CSV)**
+- Feat: **iOS Simulator `.realm` Auto-Finder**, **Android Emulator (ADB) `.realm` Puller & Auto-Sync**, **Live Simulator & Debug Sync Status + Toast Notifications**, **Drag & Drop File Open**, **Mock Data Generator (10/50/100 rows)**, and **Export Current View (JSON / CSV)**
 - Feat: **Unlimited Split View (`⌘\` / `⌘⇧\`)** with drag-to-dock / swap panes and high-performance memoized rendering
 - Feat: **Smart AI Assistant (`⌘⇧A`) & Optional Local AI (Ollama)** for cross-class ID lookup, RQL query generation, Schema Advisor, and Domain Knowledge Base
 - Feat: **Built-in Read-Only MCP Server** for inspecting live Realm databases from AI coding assistants
@@ -34,11 +34,11 @@ This repository is actively maintained. That's because I'm the one using it :) W
 
 User preferences are stored as a plain JSON file in the user data directory, and can be edited by hand — the app picks up changes without a restart. **View → Show Settings File** reveals it in the file manager.
 
-| Platform | Location                                                        |
-| -------- | --------------------------------------------------------------- |
-| macOS    | `~/Library/Application Support/Realm Studio Plus/settings.json` |
-| Linux    | `~/.config/Realm Studio Plus/settings.json`                     |
-| Windows  | `%APPDATA%\Realm Studio Plus\settings.json`                     |
+| Platform | Location                                                            |
+| -------- | ------------------------------------------------------------------- |
+| macOS    | `~/Library/Application Support/Realm Studio Ultimate/settings.json` |
+| Linux    | `~/.config/Realm Studio Ultimate/settings.json`                     |
+| Windows  | `%APPDATA%\Realm Studio Ultimate\settings.json`                     |
 
 ```json
 {
@@ -56,7 +56,7 @@ Visit https://docs.mongodb.com/realm/studio/ for more information on Realm Studi
 
 ## Installing
 
-Click the links below to download the latest version of Realm Studio for
+Click the links below to download the latest version of Realm Studio Ultimate:
 
 https://github.com/MassMack/realm-studio-ultimate/releases
 
@@ -72,4 +72,4 @@ See [CONTRIBUTING.md](https://github.com/MassMack/realm-studio-ultimate/blob/mas
 
 Realm Studio is published under [the Apache 2.0 license](LICENSE).
 
-Realm Studio Plus is a fork of the original Realm Studio. This project also inherits the license of the original project.
+Realm Studio Ultimate is a fork of the original Realm Studio. This project also inherits the license of the original project.

@@ -39,7 +39,7 @@ Back the certificate up: export it from Keychain Access as a `.p12` and store it
 Notarization is a separate credential from the signing certificate. Create a keychain profile once so that nothing secret ends up in a file:
 
 ```bash
-xcrun notarytool store-credentials "realm-studio-plus" --apple-id "you@example.com" --team-id "YOURTEAMID" --password "app-specific-password"
+xcrun notarytool store-credentials "realm-studio-ultimate" --apple-id "you@example.com" --team-id "YOURTEAMID" --password "app-specific-password"
 ```
 
 The app-specific password comes from [account.apple.com](https://account.apple.com) → **Sign-In and Security** → **App-Specific Passwords**. It is only used here; after this command it lives in the login keychain and is not needed again.
@@ -52,7 +52,7 @@ To scope the credential more tightly, create an App Store Connect API key (**Use
 cp electron-builder.env.example electron-builder.env
 ```
 
-The example file already contains `APPLE_KEYCHAIN_PROFILE=realm-studio-plus`. Adjust it if you used a different profile name, or uncomment one of the other credential blocks instead. `electron-builder.env` is git-ignored; the electron-builder CLI loads it automatically from the project root, and `npm run notarize:dmg` reads the same file.
+The example file already contains `APPLE_KEYCHAIN_PROFILE=realm-studio-ultimate`. Adjust it if you used a different profile name, or uncomment one of the other credential blocks instead. `electron-builder.env` is git-ignored; the electron-builder CLI loads it automatically from the project root, and `npm run notarize:dmg` reads the same file.
 
 Real environment variables take precedence over the file, so a one-off build can override any of them without editing it.
 
@@ -94,7 +94,7 @@ The last check is the one that matters — it is exactly what macOS does on the 
 To sanity-check a downloaded release the same way:
 
 ```bash
-codesign -dvv "/Applications/Realm Studio Plus.app"
+codesign -dvv "/Applications/Realm Studio Ultimate.app"
 ```
 
 ## What the configuration does
@@ -126,7 +126,7 @@ No credentials were found. Confirm `electron-builder.env` exists and that the ke
 Fetch the details — the log names the offending binary:
 
 ```bash
-xcrun notarytool log <submission-id> --keychain-profile "realm-studio-plus"
+xcrun notarytool log <submission-id> --keychain-profile "realm-studio-ultimate"
 ```
 
 The usual cause is a nested binary that was not signed or is missing the hardened runtime flag.
@@ -136,5 +136,5 @@ The usual cause is a nested binary that was not signed or is missing the hardene
 Releases up to 20.1.0 are unsigned and cannot be repaired by Gatekeeper. Those users have to clear the quarantine attribute once, or upgrade to a signed release:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Realm Studio Plus.app"
+xattr -dr com.apple.quarantine "/Applications/Realm Studio Ultimate.app"
 ```

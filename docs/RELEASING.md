@@ -1,6 +1,6 @@
-# Releasing Realm Studio Plus
+# Releasing Realm Studio Ultimate
 
-The runbook for cutting a release of this fork. Releases are published to [the releases of this repository](https://github.com/jooy2/realm-studio-plus/releases), which is also where the running app looks for updates - see [What the auto updater needs from a release](#what-the-auto-updater-needs-from-a-release).
+The runbook for cutting a release of this fork. Releases are published to [the releases of this repository](https://github.com/MassMack/realm-studio-ultimate/releases), which is also where the running app looks for updates - see [What the auto updater needs from a release](#what-the-auto-updater-needs-from-a-release).
 
 Everything here is done by hand, on one machine per platform. The workflows under `.github/workflows` belong to the original project and cannot run here.
 
@@ -83,9 +83,9 @@ A release is only complete if the metadata file for the platform is there:
 
 | Platform | Installers | Metadata |
 | --- | --- | --- |
-| macOS | `realm-studio-plus-<version>-<x64\|arm64>.dmg`, `realm-studio-plus-<version>-<x64\|arm64>.zip` | `latest-mac.yml` |
-| Windows | `realm-studio-plus-<version>-<x64\|arm64>-setup.exe`, `realm-studio-plus-<version>-<x64\|arm64>-portable.exe` | `latest.yml` |
-| Linux | `realm-studio-plus-<version>-<x64\|arm64>.AppImage`, `realm-studio-plus-<version>-<amd64\|arm64>.deb`, `realm-studio-plus-<version>-<x86_64\|aarch64>.rpm` | `latest-linux.yml` |
+| macOS | `realm-studio-ultimate-<version>-<x64\|arm64>.dmg`, `realm-studio-ultimate-<version>-<x64\|arm64>.zip` | `latest-mac.yml` |
+| Windows | `realm-studio-ultimate-<version>-<x64\|arm64>-setup.exe`, `realm-studio-ultimate-<version>-<x64\|arm64>-portable.exe` | `latest.yml` |
+| Linux | `realm-studio-ultimate-<version>-<x64\|arm64>.AppImage`, `realm-studio-ultimate-<version>-<amd64\|arm64>.deb`, `realm-studio-ultimate-<version>-<x86_64\|aarch64>.rpm` | `latest-linux.yml` |
 
 Plus the `.blockmap` files written next to the installers - they let the updater download only the parts of an installer that changed.
 
@@ -176,7 +176,7 @@ Anyone who already installed the broken version keeps it until the next release;
 
 ## The original project's pipeline
 
-The instructions below can only be performed by Realm employees and describe the original project's pipeline. Realm Studio Plus has no access to it, and it publishes to an S3 bucket rather than to GitHub releases.
+The instructions below can only be performed by Realm employees and describe the original project's pipeline. Realm Studio Ultimate has no access to it, and it publishes to an S3 bucket rather than to GitHub releases.
 
 ### Prepare a release
 

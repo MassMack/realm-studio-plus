@@ -80,9 +80,9 @@ function wrapReadOnly<Args>(
   };
 }
 
-export function createRealmMcpServer(version = '1.1.0'): McpServer {
+export function createRealmMcpServer(version = '1.0.0'): McpServer {
   const server = new McpServer({
-    name: 'realm-studio-plus',
+    name: 'realm-studio-ultimate',
     version
   });
 
@@ -220,9 +220,9 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
   server.registerTool(
     'get_open_realms',
     {
-      title: 'Get Currently Open Realms in Realm Studio Plus',
+      title: 'Get Currently Open Realms in Realm Studio Ultimate',
       description:
-        'Return the .realm file(s) currently open in Realm Studio Plus (most recently focused window and active class first), plus recent files as fallback.',
+        'Return the .realm file(s) currently open in Realm Studio Ultimate (most recently focused window and active class first), plus recent files as fallback.',
       inputSchema: {},
       annotations: READ_ONLY_ANNOTATIONS
     },
@@ -237,7 +237,7 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
     {
       title: 'List Recently Opened Realms',
       description:
-        'List .realm files recently opened in Realm Studio Plus (from local app history).',
+        'List .realm files recently opened in Realm Studio Ultimate (from local app history).',
       inputSchema: {},
       annotations: READ_ONLY_ANNOTATIONS
     },
@@ -251,14 +251,14 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
     {
       title: 'Inspect Realm Overview',
       description:
-        'Open a .realm file in strict read-only mode and return schemaVersion, file size, classes, primary keys, and row counts. Automatically uses the currently open Realm Studio Plus window and saved Vault/session key if path/key are omitted.',
+        'Open a .realm file in strict read-only mode and return schemaVersion, file size, classes, primary keys, and row counts. Automatically uses the currently open Realm Studio Ultimate window and saved Vault/session key if path/key are omitted.',
       inputSchema: {
         path: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Plus.'
+            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Ultimate.'
           ),
         encryptionKeyHex: z
           .string()
@@ -279,14 +279,14 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
     {
       title: 'Get Realm Class Schema',
       description:
-        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) plus Domain Knowledge Base descriptions when available. Defaults to the currently open Realm in Realm Studio Plus when path is omitted.',
+        'Return detailed property definitions (type, objectType, optional, indexed, primaryKey) plus Domain Knowledge Base descriptions when available. Defaults to the currently open Realm in Realm Studio Ultimate when path is omitted.',
       inputSchema: {
         path: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Plus.'
+            'Absolute or ~/ path to the .realm file. Omit to inspect the Realm currently open in Realm Studio Ultimate.'
           ),
         className: z
           .string()
@@ -308,21 +308,21 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
     'query_realm',
     {
       title: 'Query Realm Objects (RQL)',
-      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields masked by default). Omit path/className to query the currently open window & table in Realm Studio Plus. Date literals require unquoted UTC YYYY-MM-DD@HH:MM:SS.`,
+      description: `Execute a read-only Realm Query Language (RQL) filter against a class and return serialized JSON rows (capped at ${MAX_MCP_QUERY_LIMIT} rows per call; sensitive fields masked by default). Omit path/className to query the currently open window & table in Realm Studio Ultimate. Date literals require unquoted UTC YYYY-MM-DD@HH:MM:SS.`,
       inputSchema: {
         path: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Plus.'
+            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Ultimate.'
           ),
         className: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Realm class name to query. Omit to use the currently active table in Realm Studio Plus.'
+            'Realm class name to query. Omit to use the currently active table in Realm Studio Ultimate.'
           ),
         query: z
           .string()
@@ -385,14 +385,14 @@ export function createRealmMcpServer(version = '1.1.0'): McpServer {
           .min(1)
           .optional()
           .describe(
-            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Plus.'
+            'Absolute or ~/ path to the .realm file. Omit to use the currently open Realm in Realm Studio Ultimate.'
           ),
         className: z
           .string()
           .min(1)
           .optional()
           .describe(
-            'Realm class name to count. Omit to use the currently active table in Realm Studio Plus.'
+            'Realm class name to count. Omit to use the currently active table in Realm Studio Ultimate.'
           ),
         query: z
           .string()

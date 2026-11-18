@@ -150,7 +150,7 @@ function buildMcpConfigSnippet(
     return JSON.stringify(
       {
         servers: {
-          'realm-studio-plus': {
+          'realm-studio-ultimate': {
             type: 'stdio',
             command: nodeCommand,
             args: [bundlePath],
@@ -168,7 +168,7 @@ function buildMcpConfigSnippet(
   return JSON.stringify(
     {
       mcpServers: {
-        'realm-studio-plus': {
+        'realm-studio-ultimate': {
           command: nodeCommand,
           args: [bundlePath],
           env: {

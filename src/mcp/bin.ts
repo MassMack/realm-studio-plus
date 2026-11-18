@@ -23,7 +23,7 @@ async function main() {
   const server = createRealmMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Realm Studio Plus MCP server running on stdio (read-only)');
+  console.error('Realm Studio Ultimate MCP server running on stdio (read-only)');
 
   // Realm's native C++ runtime can keep libuv handles alive after files are
   // closed; exit explicitly when the MCP client closes stdin to avoid zombies.
@@ -38,6 +38,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Fatal error starting Realm Studio Plus MCP server:', err);
+  console.error('Fatal error starting Realm Studio Ultimate MCP server:', err);
   process.exit(1);
 });

@@ -672,7 +672,7 @@ export async function askAiAssistant(params: {
     : 'Privacy mode: row values are redacted; only schema, counts, matched fields, and primaryKey values are exposed.';
 
   const systemPrompt = [
-    'You are the intelligent assistant inside Realm Studio Plus (a local Realm database viewer).',
+    'You are the intelligent assistant inside Realm Studio Ultimate (a local Realm database viewer).',
     'You can:',
     '1. Find where any ID, keyword, or value lives across the Realm database (`search_realm_everywhere`), check incoming links, and inspect rows (`query_class_objects`).',
     '2. Explain the database schema, counts, relationships, Knowledge Base notes, or answer general Realm / RQL / debugging questions concisely.',

@@ -22,7 +22,12 @@ import path from 'path';
 
 export function getAppUserDataCandidates(): string[] {
   const home = os.homedir();
-  const names = ['Realm Studio Plus', 'realm-studio-plus'];
+  const names = [
+    'Realm Studio Ultimate',
+    'realm-studio-ultimate',
+    'Realm Studio Plus',
+    'realm-studio-plus'
+  ];
   if (process.platform === 'darwin') {
     return names.map((n) =>
       path.join(home, 'Library/Application Support', n)

@@ -132,7 +132,7 @@ export function resolveTargetRealm(rawPath?: string): IResolvedTargetRealm {
   }
 
   throw new Error(
-    'No Realm file specified, no Realm Studio Plus window is currently open, and no recent .realm file was found. Open a .realm file in Realm Studio Plus or pass "path".'
+    'No Realm file specified, no Realm Studio Ultimate window is currently open, and no recent .realm file was found. Open a .realm file in Realm Studio Ultimate or pass "path".'
   );
 }
 
@@ -338,7 +338,7 @@ export function withOpenedRealm<T>(
   if (!realm) {
     if (isDecryptionOrInvalidFormatError(lastError)) {
       throw new Error(
-        `Cannot decrypt Realm file (${path.basename(resolvedPath)}). Open/unlock it in Realm Studio Plus (or save its key in Key Vault), set REALM_ENCRYPTION_KEY in your MCP "env" config, or pass encryptionKeyHex.`
+        `Cannot decrypt Realm file (${path.basename(resolvedPath)}). Open/unlock it in Realm Studio Ultimate (or save its key in Key Vault), set REALM_ENCRYPTION_KEY in your MCP "env" config, or pass encryptionKeyHex.`
       );
     }
     throw lastError instanceof Error

@@ -1,7 +1,7 @@
 {
-  "name": "realm-studio-plus",
-  "productName": "Realm Studio Plus",
-  "version": "1.1.0",
+  "name": "realm-studio-ultimate",
+  "productName": "Realm Studio Ultimate",
+  "version": "1.0.0",
   "description": "A tool for everything Realm!",
   "author": {
     "name": "Realm",
@@ -12,7 +12,7 @@
   "license": "Apache-2.0",
   "main": "./build/main.bundle.js",
   "build": {
-    "appId": "com.realm.realm-studio-plus",
+    "appId": "com.realm.realm-studio-ultimate",
     "compression": "normal",
     "afterSign": "./scripts/after-sign-mac-adhoc.js",
     "artifactName": "${name}-${version}-${arch}.${ext}",
@@ -99,7 +99,7 @@
     },
     "protocols": [
       {
-        "name": "Realm Studio",
+        "name": "Realm Studio Ultimate",
         "schemes": [
           "x-realm-studio"
         ]

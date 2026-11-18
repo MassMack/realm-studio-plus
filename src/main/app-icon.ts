@@ -37,7 +37,7 @@ export function resolveAppIconPath(): string | undefined {
 
 /**
  * Ensures running via `electron .` / `npm start` displays the custom
- * Realm Studio Plus icon in the macOS Dock and About panel instead of Electron's default icon.
+ * Realm Studio Ultimate icon in the macOS Dock and About panel instead of Electron's default icon.
  */
 export function applyCustomAppIcon(): string | undefined {
   const iconPath = resolveAppIconPath();
@@ -59,7 +59,7 @@ export function applyCustomAppIcon(): string | undefined {
 
   try {
     app.setAboutPanelOptions({
-      applicationName: app.name || 'Realm Studio Plus',
+      applicationName: app.name || 'Realm Studio Ultimate',
       applicationVersion: app.getVersion(),
       iconPath
     });

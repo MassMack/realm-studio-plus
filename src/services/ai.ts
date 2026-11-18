@@ -1418,7 +1418,7 @@ export async function generateRealmQuery(params: {
   );
 
   const systemPrompt = [
-    'You are an expert Realm Query Language (RQL) assistant for Realm Studio Plus.',
+    'You are an expert Realm Query Language (RQL) assistant for Realm Studio Ultimate.',
     'Translate the user request (Thai or English) into a single valid Realm Query Language (RQL) filter predicate for the ACTIVE CLASS.',
     buildRqlSystemPromptGuide(),
     getCurrentRqlTimestampHint(),
